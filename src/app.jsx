@@ -402,6 +402,7 @@ function MarketScannerWorkspace({ snapshot, selected, setSelectedId }) {
 
 function ModelLabWorkspace({ snapshot, selected }) {
   const components = selected?.components || {};
+  const backtest = snapshot.backtest || {};
   const monteCarlo = [
     ["Median outcome", percent((selected?.aiProbability || 0) + 1.4)],
     ["5th percentile", percent(Math.max(1, (selected?.aiProbability || 0) - 11.2))],
@@ -453,6 +454,10 @@ function ModelLabWorkspace({ snapshot, selected }) {
         </Panel>
         <AISynthesis opportunity={selected} snapshot={snapshot} />
       </div>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
+        <BacktestCurve backtest={backtest} />
+        <BacktestCalibration backtest={backtest} />
+      </div>
     </div>
   );
 }
@@ -498,6 +503,7 @@ function PropsWorkspace({ snapshot }) {
 
 function RiskOfficeWorkspace({ snapshot }) {
   const opportunities = snapshot.opportunities || [];
+  const backtest = snapshot.backtest || {};
   return (
     <div className="space-y-3 p-3">
       <WorkspaceHeader
@@ -517,6 +523,11 @@ function RiskOfficeWorkspace({ snapshot }) {
             <RiskRow label="Stop condition" value={snapshot.bankroll.drawdown < -5 ? "De-risk" : "Normal"} />
           </div>
         </Panel>
+      </div>
+      <BacktestSummary backtest={backtest} />
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
+        <BacktestCurve backtest={backtest} />
+        <BacktestTiers backtest={backtest} />
       </div>
       <Panel icon={BadgeDollarSign} title="Kelly Position Ledger">
         <div className="grid gap-2 p-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -538,6 +549,7 @@ function RiskOfficeWorkspace({ snapshot }) {
           ))}
         </div>
       </Panel>
+      <BacktestLedger backtest={backtest} />
     </div>
   );
 }
@@ -640,6 +652,166 @@ function RiskRow({ label, value }) {
       <span className="text-slate-400">{label}</span>
       <span className="mono font-bold text-white">{value}</span>
     </div>
+  );
+}
+
+function BacktestSummary({ backtest }) {
+  const metrics = [
+    ["Win Rate", percent(backtest.winRate || 0), "settled wins over modeled bets", Target],
+    ["ROI", percent(backtest.roi || 0), "profit divided by stake", TrendingUp],
+    ["Profit", `${signed(backtest.profit || 0)}u`, "net units", CircleDollarSign],
+    ["Max DD", `${signed(backtest.maxDrawdown || 0)}u`, "peak-to-trough", ShieldCheck],
+    ["CLV+", percent(backtest.clvPositiveRate || 0), "positive closing-line rate", LineChart],
+    ["Sharpe", Number(backtest.sharpe || 0).toFixed(2), "risk-adjusted return", Activity],
+  ];
+
+  return (
+    <Panel icon={BarChart3} title="Backtest Summary" action={<span className="status-pill mono text-[10px]">{backtest.window || "Paper model"}</span>}>
+      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-6">
+        {metrics.map(([label, value, sub, Icon]) => (
+          <div key={label} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
+              <Icon size={14} className="text-cyan-300" />
+            </div>
+            <div className="mono mt-2 text-xl font-black text-white">{value}</div>
+            <div className="mt-1 truncate text-[11px] text-slate-500">{sub}</div>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-white/10 px-3 py-2 text-xs leading-5 text-slate-400">
+        {backtest.note || "Backtest metrics will appear after the strategy engine initializes."}
+      </div>
+    </Panel>
+  );
+}
+
+function BacktestCurve({ backtest }) {
+  const canvasRef = useChart((canvas) => {
+    const curve = backtest.equityCurve || [];
+    return new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: curve.map((item) => item.label),
+        datasets: [
+          {
+            label: "Equity",
+            data: curve.map((item) => item.equity),
+            borderColor: "#36f2a7",
+            backgroundColor: "rgba(54, 242, 167, 0.13)",
+            pointRadius: 0,
+            fill: true,
+            tension: 0.35,
+          },
+          {
+            label: "Drawdown",
+            data: curve.map((item) => item.drawdown),
+            borderColor: "#ff4f70",
+            backgroundColor: "rgba(255, 79, 112, 0.08)",
+            pointRadius: 0,
+            fill: true,
+            tension: 0.35,
+          },
+        ],
+      },
+      options: chartOptions({ yGrid: true }),
+    });
+  }, [backtest?.bets, backtest?.profit]);
+
+  return (
+    <Panel icon={AreaChart} title="Backtest Equity Curve" action={<span className="status-pill mono text-[10px]">{backtest.mode || "Backtest"}</span>}>
+      <div className="p-3">
+        <div className="mb-3 grid gap-2 sm:grid-cols-4">
+          <DetailMetric label="Bets" value={backtest.bets || 0} />
+          <DetailMetric label="Win" value={percent(backtest.winRate || 0)} />
+          <DetailMetric label="ROI" value={percent(backtest.roi || 0)} />
+          <DetailMetric label="CLV" value={signed(backtest.avgClv || 0)} />
+        </div>
+        <div className="chart-wrap h-[294px] min-h-[294px]">
+          <canvas ref={canvasRef} />
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function BacktestCalibration({ backtest }) {
+  return (
+    <Panel icon={Gauge} title="Calibration By Probability">
+      <div className="grid gap-2 p-3">
+        {(backtest.calibration || []).map((bin) => (
+          <div key={bin.label} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+            <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+              <span className="mono text-slate-300">{bin.label}</span>
+              <span className="text-slate-500">{bin.bets} bets</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">Projected</div>
+                <MiniBar value={bin.projected} tall />
+                <div className="mono mt-1 text-xs text-cyan-200">{percent(bin.projected || 0)}</div>
+              </div>
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">Actual</div>
+                <MiniBar value={bin.actual} tall />
+                <div className="mono mt-1 text-xs text-mint">{percent(bin.actual || 0)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function BacktestLedger({ backtest }) {
+  return (
+    <Panel icon={BarChart3} title="Recent Backtest Ledger">
+      <div className="grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono lg:grid-cols-[92px_minmax(160px,1fr)_minmax(150px,1fr)_70px_70px_70px_70px]">
+        <div>Date</div>
+        <div>Matchup</div>
+        <div>Market</div>
+        <div>Score</div>
+        <div>Stake</div>
+        <div>Result</div>
+        <div>PNL</div>
+      </div>
+      <div className="max-h-[420px] overflow-y-auto">
+        {(backtest.recent || []).map((trade) => (
+          <div key={trade.id} className="grid gap-2 border-b border-white/10 px-3 py-2 text-sm lg:grid-cols-[92px_minmax(160px,1fr)_minmax(150px,1fr)_70px_70px_70px_70px]">
+            <div className="mono text-xs text-slate-500">{trade.date}</div>
+            <div className="truncate font-bold text-white">{trade.matchup}</div>
+            <div className="truncate text-slate-300">{trade.market}</div>
+            <div className="mono text-cyan-200">{trade.score}</div>
+            <div className="mono text-slate-300">{trade.stake}u</div>
+            <div className={`mono ${trade.result === "Win" ? "text-mint" : "text-red-300"}`}>{trade.result}</div>
+            <div className={`mono font-bold ${trade.pnl >= 0 ? "text-mint" : "text-red-300"}`}>{signed(trade.pnl)}u</div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function BacktestTiers({ backtest }) {
+  return (
+    <Panel icon={BarChart3} title="Backtest By Score Tier">
+      <div className="grid gap-2 p-3">
+        {(backtest.scoreTiers || []).map((tier) => (
+          <div key={tier.label} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-sm font-bold text-white">{tier.label}</span>
+              <span className="mono text-xs text-slate-400">{tier.bets} bets</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <DetailMetric label="Win" value={percent(tier.winRate || 0)} />
+              <DetailMetric label="ROI" value={percent(tier.roi || 0)} />
+              <DetailMetric label="CLV" value={signed(tier.avgClv || 0)} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }
 
@@ -747,13 +919,14 @@ function StatusMetric({ icon: Icon, label, value }) {
 }
 
 function MetricStrip({ snapshot }) {
+  const backtest = snapshot.backtest || {};
   const metrics = [
     ["Top EV", signed(snapshot.opportunities[0]?.ev || 0), "Best risk-adjusted play", TrendingUp, "text-mint"],
     ["AI Score", snapshot.opportunities[0]?.score || 0, snapshot.opportunities[0]?.label || "Scanning", BrainCircuit, "text-cyan-300"],
     ["CLV Avg", signed(snapshot.bankroll.clv), "Closing-line value", Target, "text-amber-300"],
     ["Kelly Max", `${snapshot.opportunities[0]?.kelly || 0}u`, "Current position cap", BadgeDollarSign, "text-mint"],
-    ["ROI", percent(snapshot.bankroll.roi), "Model portfolio", AreaChart, "text-cyan-300"],
-    ["Exposure", percent(snapshot.bankroll.exposure), "Bankroll deployed", ShieldCheck, "text-amber-300"],
+    ["BT Win", percent(backtest.winRate || snapshot.bankroll.winRate), `${backtest.bets || 0} backtest bets`, Gauge, "text-cyan-300"],
+    ["BT ROI", percent(backtest.roi || snapshot.bankroll.roi), "Backtest return", AreaChart, "text-amber-300"],
   ];
 
   return (
