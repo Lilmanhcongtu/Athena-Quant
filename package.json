@@ -1,10 +1,3 @@
-{
-  "name": "elite-ai-sports-betting-intelligence-platform",
-  "version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Institutional-grade AI sports betting intelligence terminal with live odds intelligence, opportunity scoring, and analytics.",
-  "scripts": {
-    "start": "node server.js"
-  }
-}
+.env.local
+node_modules/
+.DS_Store

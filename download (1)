@@ -1,0 +1,5 @@
+ODDS_PROVIDER=sportsgameodds
+ODDS_API_KEY=replace_with_your_sportsgameodds_key
+ODDS_LEAGUES=NBA,NFL,MLB,NHL
+ODDS_LIMIT=12
+ODDS_REFRESH_MS=30000
