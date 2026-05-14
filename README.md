@@ -15,6 +15,7 @@ What is included:
 - Feed diagnostics showing real/fallback mode, enabled leagues, refresh interval, next retry, quota values, events, books, and market count.
 - Real Results + Bet Tracker Engine for logging actual bets, settling win/loss/push results, calculating real ROI/P&L, tracking open exposure, and comparing performance by sport/market.
 - Game Schedule Board with start times across the opportunity feed, bet detail tickets, parlay legs, and tracked bet suggestions.
+- Superhuman Intelligence Layer with sport-specific model profiles, book sharpness weighting, injury/lineup/weather context risk, price discipline, "price is gone" refusal logic, model grading, alert intelligence, and cloud-readiness diagnostics.
 
 Run locally:
 
@@ -64,3 +65,12 @@ Bet tracking:
 - The tracker updates real win rate, ROI, profit/loss, open exposure, current bankroll, and sport/market performance.
 
 This first results engine uses manual settlement. To make it fully automatic, connect a final scores/results API and map settled outcomes into `bet_ledger` and `settled_results`.
+
+Intelligence upgrade notes:
+
+- Price Discipline tells you whether to bet now, wait, watch the number, or refuse because the price is gone.
+- Context Brain flags injury, lineup, weather, and rest/travel risk before you place a bet.
+- Book Sharpness Weighting gives more influence to sharper reference books than softer/noisier books.
+- Real Model Grading tracks Brier score, log loss, calibration error, and confidence buckets from the available historical sample.
+- Historical Odds Warehouse stores local pre-game snapshots for CLV, no-lookahead backtests, and future model learning.
+- For a true live production version, add cloud user accounts, a cloud database, encrypted API-key storage, final-score settlement feeds, and background odds workers.

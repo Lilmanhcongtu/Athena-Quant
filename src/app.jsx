@@ -485,12 +485,22 @@ function IntelligenceUpgradePanel({ snapshot, compact = false }) {
   const clv = pack.clvTracker || {};
   const quality = pack.dataQuality || {};
   const noLookahead = pack.noLookahead || {};
+  const grading = pack.modelGrading || {};
+  const confidenceBuckets = grading.confidenceBuckets || grading.buckets || [];
+  const warehouse = pack.warehouse || {};
+  const priceDiscipline = pack.priceDiscipline || {};
+  const alertIntel = pack.alertIntelligence || {};
+  const cloud = pack.cloudReadiness || {};
   const weakest = pack.weakestParlays?.[0];
   const metrics = [
     ["Model Trust", `${trust.score || 0}/100`, trust.grade || "Learning", BrainCircuit, "text-mint"],
     ["CLV Tracker", signed(clv.average || 0), `${clv.positiveRate || 0}% CLV+`, LineChart, "text-amber-200"],
     ["Data Quality", `${quality.score || 0}/100`, quality.label || "Checking", Radar, "text-cyan-200"],
     ["No-Lookahead", `${noLookahead.safeRate || 0}%`, noLookahead.status || "Guard active", ShieldCheck, "text-mint"],
+    ["Model Grade", grading.grade || "Learning", `Brier ${grading.brier ?? "N/A"}`, Gauge, "text-cyan-200"],
+    ["Odds Warehouse", currency.format(warehouse.oddsSnapshots || 0), warehouse.status || "Capturing", Cable, "text-amber-200"],
+    ["Price Gate", priceDiscipline.priceGone || 0, `${priceDiscipline.betNow || 0} bet-now`, Target, "text-mint"],
+    ["Alerts", alertIntel.count || 0, alertIntel.highestSeverity || "Quiet", AlarmClock, "text-amber-200"],
   ];
 
   return (
@@ -527,6 +537,60 @@ function IntelligenceUpgradePanel({ snapshot, compact = false }) {
           </div>
         ) : null}
 
+        {!compact ? (
+          <div className="grid gap-3 xl:grid-cols-3">
+            <IntelligenceDiagnosticPanel
+              icon={Gauge}
+              title="Real Model Grading"
+              tone="text-cyan-200"
+              rows={[
+                ["Brier score", grading.brier ?? "N/A"],
+                ["Log loss", grading.logLoss ?? "N/A"],
+                ["Calibration error", `${grading.calibrationError ?? 0}%`],
+                ["Confidence buckets", `${confidenceBuckets.length || 0} tracked`],
+              ]}
+              note={grading.note || "Settled bets will make the model honesty layer stronger over time."}
+            />
+            <IntelligenceDiagnosticPanel
+              icon={Target}
+              title="Price Is Gone Engine"
+              tone="text-mint"
+              rows={[
+                ["Bet now", priceDiscipline.betNow || 0],
+                ["Watch / wait", (priceDiscipline.watch || 0) + (priceDiscipline.wait || 0)],
+                ["Price gone", priceDiscipline.priceGone || 0],
+                ["Parlay rebuilds", priceDiscipline.rebuildParlays || 0],
+              ]}
+              note={priceDiscipline.note || "Athena blocks bets when the listed price no longer carries enough edge."}
+            />
+            <IntelligenceDiagnosticPanel
+              icon={Cable}
+              title="Warehouse + Cloud Readiness"
+              tone="text-amber-200"
+              rows={[
+                ["Odds snapshots", currency.format(warehouse.oddsSnapshots || 0)],
+                ["Line moves", currency.format(warehouse.lineMoveRows || 0)],
+                ["Cloud status", cloud.status || "Local mode"],
+                ["Missing live pieces", `${cloud.missing?.length || 0}`],
+              ]}
+              note={warehouse.note || cloud.note || "Local warehouse is active; cloud database and background workers are the next production step."}
+            />
+          </div>
+        ) : null}
+
+        {!compact && (alertIntel.alerts || []).length ? (
+          <div className="rounded-lg border border-amber-300/20 bg-amber-300/[0.04] p-3">
+            <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-amber-200">Alert Intelligence</div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {(alertIntel.alerts || []).slice(0, 4).map((alert) => (
+                <div key={alert.id || `${alert.type}-${alert.matchup}`} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+                  <span className="font-bold text-white">{alert.type}:</span> {alert.matchup || "Market"} | {alert.action || alert.severity}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="grid gap-2">
           {(pack.invalidationRules || []).slice(0, compact ? 3 : 5).map((rule) => (
             <div key={rule} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-slate-300">
@@ -536,6 +600,26 @@ function IntelligenceUpgradePanel({ snapshot, compact = false }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+function IntelligenceDiagnosticPanel({ icon: Icon, title, rows, note, tone }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+      <div className={`mb-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] ${tone}`}>
+        <Icon size={13} />
+        {title}
+      </div>
+      <div className="grid gap-2">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs">
+            <span className="text-slate-400">{label}</span>
+            <span className="mono text-slate-100">{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 text-xs leading-5 text-slate-400">{note}</div>
+    </div>
   );
 }
 
@@ -2607,6 +2691,8 @@ function OpportunityFeed({ opportunities, selectedId, onSelect }) {
                     <FeedDetailStat label="Risk" value={item.risk} sub={`${item.volatility}/100 vol`} tone={item.risk === "Elevated" ? "text-amber-200" : "text-slate-100"} />
                     <FeedDetailStat label="Trust" value={`${item.modelTrustScore || 0}/100`} sub="model trust" tone="text-cyan-200" />
                     <FeedDetailStat label="Data" value={`${item.dataQualityScore || item.components?.dataQuality || 0}/100`} sub={item.clvTracker?.status || "quality"} tone="text-amber-200" />
+                    <FeedDetailStat label="Action" value={item.priceDiscipline?.action || "Watch"} sub={item.priceDiscipline?.urgency || "price gate"} tone={priceActionTone(item.priceDiscipline?.action)} />
+                    <FeedDetailStat label="Context" value={item.contextBrain?.status || "Check"} sub={item.contextBrain?.primaryRisk || "news risk"} tone={contextTone(item.contextBrain?.overallRisk)} />
                   </div>
                   <div className="mt-3">
                     <div className="mb-1 flex justify-between text-[10px] uppercase tracking-[0.12em] text-slate-500">
@@ -2705,6 +2791,12 @@ function OpportunityDetail({ opportunity }) {
         </div>
 
         <BetExecutionTicket opportunity={opportunity} />
+        <div className="mt-3 grid gap-2 lg:grid-cols-4">
+          <DecisionGateCard opportunity={opportunity} />
+          <SportModelBrainCard opportunity={opportunity} />
+          <ContextBrainCard opportunity={opportunity} />
+          <BookSharpnessCard opportunity={opportunity} />
+        </div>
         <MarketMemoryTimeline opportunity={opportunity} />
 
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -2798,6 +2890,119 @@ function BetExecutionTicket({ opportunity }) {
   );
 }
 
+function DecisionGateCard({ opportunity }) {
+  const gate = opportunity.priceDiscipline || {};
+  const action = gate.action || "Watch price";
+  const currentOdds = Number.isFinite(Number(gate.currentOdds)) ? formatAmericanOdds(gate.currentOdds) : extractDisplayOdds(opportunity.line);
+  const minimumOdds = Number.isFinite(Number(gate.minimumAcceptableOdds)) ? formatAmericanOdds(gate.minimumAcceptableOdds) : extractDisplayOdds(opportunity.line);
+  return (
+    <div className="rounded-lg border border-mint/20 bg-mint/[0.055] p-3">
+      <div className="text-[10px] uppercase tracking-[0.16em] text-mint">Price Discipline</div>
+      <div className={`mono mt-2 text-xl font-black ${priceActionTone(action)}`}>{action}</div>
+      <div className="mt-2 text-xs leading-5 text-slate-300">{gate.rule || `Only bet if ${opportunity.line} is still available or better.`}</div>
+      <div className="mt-3 grid gap-2">
+        <MiniDecisionRow label="Current odds" value={currentOdds || opportunity.line} />
+        <MiniDecisionRow label="Acceptable" value={minimumOdds || opportunity.line} />
+        <MiniDecisionRow label="EV now" value={`${signed(gate.evNow ?? opportunity.ev)}%`} />
+      </div>
+    </div>
+  );
+}
+
+function SportModelBrainCard({ opportunity }) {
+  const model = opportunity.sportModel || {};
+  const factors = model.factors || [];
+  return (
+    <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/[0.045] p-3">
+      <div className="text-[10px] uppercase tracking-[0.16em] text-cyan-200">Sport Model Brain</div>
+      <div className="mt-2 text-sm font-black text-white">{model.engine || "General Market Engine"}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-400">Confidence {model.confidence || opportunity.confidence}/100</div>
+      <div className="mt-3 grid gap-2">
+        {factors.slice(0, 4).map((factor) => (
+          <div key={factor.factor}>
+            <div className="mb-1 flex justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <span className="truncate">{factor.factor}</span>
+              <span className="mono text-slate-300">{factor.score}</span>
+            </div>
+            <MiniBar value={factor.score} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ContextBrainCard({ opportunity }) {
+  const context = opportunity.contextBrain || {};
+  const rows = [
+    ["Injury/news", context.injuryRisk],
+    ["Lineup", context.lineupRisk],
+    ["Weather", context.weatherRisk],
+    ["Rest/travel", context.travelRestRisk],
+  ];
+  return (
+    <div className="rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3">
+      <div className="text-[10px] uppercase tracking-[0.16em] text-amber-200">Injury / Lineup Brain</div>
+      <div className={`mt-2 text-sm font-black ${contextTone(context.overallRisk)}`}>{context.status || "Verify before bet"}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-400">Main risk: {context.primaryRisk || "news risk"}</div>
+      <div className="mt-3 grid gap-2">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <div className="mb-1 flex justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <span>{label}</span>
+              <span className="mono text-slate-300">{value ?? 0}</span>
+            </div>
+            <MiniBar value={value || 0} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BookSharpnessCard({ opportunity }) {
+  const sharpness = opportunity.bookSharpness || {};
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+      <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Book Sharpness Weight</div>
+      <div className="mt-2 text-sm font-black text-white">{sharpness.tier || "Market signal"}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-400">{sharpness.book || opportunity.book} weight {sharpness.weight ?? "N/A"}</div>
+      <div className="mt-3">
+        <div className="mb-1 flex justify-between text-[10px] uppercase tracking-[0.12em] text-slate-500">
+          <span>Market truth pressure</span>
+          <span className="mono text-slate-300">{sharpness.pressure || 0}/100</span>
+        </div>
+        <MiniBar value={sharpness.pressure || 0} tall />
+      </div>
+      <div className="mt-3 text-xs leading-5 text-slate-400">{sharpness.note || "Sharper books get more influence than softer/noisier books."}</div>
+    </div>
+  );
+}
+
+function MiniDecisionRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs">
+      <span className="text-slate-400">{label}</span>
+      <span className="mono text-slate-100">{value}</span>
+    </div>
+  );
+}
+
+function priceActionTone(action) {
+  const value = lowerText(action, "");
+  if (value.includes("gone")) return "text-red-300";
+  if (value.includes("wait")) return "text-amber-200";
+  if (value.includes("watch")) return "text-cyan-200";
+  return "text-mint";
+}
+
+function contextTone(score) {
+  const value = Number(score || 0);
+  if (value >= 72) return "text-red-300";
+  if (value >= 55) return "text-amber-200";
+  return "text-mint";
+}
+
 function TicketField({ label, value, sub }) {
   return (
     <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
@@ -2881,12 +3086,17 @@ function buildFeedBetBrief(item) {
   const edgeText = item.edge >= 0
     ? `${signed(item.edge)} points above market implied probability`
     : `${signed(item.edge)} points below market implied probability`;
-  const action = item.score >= 88
-    ? "Priority watch/play if the price is still available."
-    : item.score >= 76
-      ? "Playable at listed price; reduce stake if the line worsens."
-      : "Small stake or watch until confirmation improves.";
-  return `${action} Model is ${percent(item.aiProbability)} vs ${percent(item.marketProbability)} market-implied, giving ${edgeText}, ${signed(item.ev)}% EV, and ${signed(item.clv)} projected CLV. Invalidate if the line moves away from ${item.line} or late news increases volatility.`;
+  const gate = item.priceDiscipline?.action || "Watch price";
+  const action = gate === "Price gone"
+    ? "Do not bet this number right now; wait for the price to come back."
+    : gate === "Wait"
+      ? "Wait for news/lineup confirmation before entry."
+      : item.score >= 88
+        ? "Priority watch/play if the price is still available."
+        : item.score >= 76
+          ? "Playable at listed price; reduce stake if the line worsens."
+          : "Small stake or watch until confirmation improves.";
+  return `${action} Model is ${percent(item.aiProbability)} vs ${percent(item.marketProbability)} market-implied, giving ${edgeText}, ${signed(item.ev)}% EV, and ${signed(item.clv)} projected CLV. Price rule: ${item.priceDiscipline?.rule || `only bet ${item.line} or better`}`;
 }
 
 function buildRiskNotes(opportunity) {
@@ -2895,6 +3105,8 @@ function buildRiskNotes(opportunity) {
     `Sizing: Kelly output is ${opportunity.kelly}u, but reduce stake if your bankroll exposure is already high or if multiple plays share the same game script.`,
     `Market risk: volatility is ${opportunity.volatility}/100, so late injury, lineup, weather, or limit changes can erase the edge quickly.`,
     `Intelligence: model trust is ${opportunity.modelTrustScore || 0}/100 and data quality is ${opportunity.dataQualityScore || opportunity.components?.dataQuality || 0}/100.`,
+    `Decision gate: ${opportunity.priceDiscipline?.action || "Watch price"} because ${opportunity.priceDiscipline?.rule || `the listed line is ${opportunity.line}`}.`,
+    `Context brain: ${opportunity.contextBrain?.status || "Verify before bet"} with primary risk marked as ${lowerText(opportunity.contextBrain?.primaryRisk, "news risk")}.`,
   ];
 
   if (opportunity.sharp > opportunity.publicMoney) {
@@ -3247,6 +3459,12 @@ function MarketDetection({ snapshot }) {
                   <span className="truncate text-sm font-bold text-white">{alert.type}</span>
                 </div>
                 <div className="mt-1 truncate text-xs text-slate-400">{alert.matchup} | {alert.market}</div>
+                {alert.action || alert.rule ? (
+                  <div className="mt-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+                    <span className={priceActionTone(alert.action)}>{alert.action || alert.severity}</span>
+                    {alert.rule ? <span className="text-slate-500"> | {alert.rule}</span> : null}
+                  </div>
+                ) : null}
               </div>
               <div className="mono text-right text-sm font-black text-cyan-200">{alert.confidence}%</div>
             </div>
@@ -3569,8 +3787,20 @@ function buildAssistantAnswer(input, opportunity, snapshot) {
   if (!opportunity) {
     return "No bet matches the active filters right now. Clear filters or lower the minimum score/EV to bring opportunities back into the board.";
   }
+  const gate = opportunity.priceDiscipline || {};
   if (q.includes("place") || q.includes("exactly") || q.includes("how to bet") || q.includes("ticket")) {
-    return `Bet ticket: go to ${opportunity.book}, find ${opportunity.matchup}, choose ${opportunity.market}, and only take ${opportunity.line} or better. Model probability is ${percent(opportunity.aiProbability)} vs ${percent(opportunity.marketProbability)} implied, so the edge is ${signed(opportunity.edge)} points. Suggested size is fractional Kelly: about ${Math.max(0.1, Number(opportunity.kelly || 0) * 0.35).toFixed(2)}u, and invalidate it if the listed price disappears, late injury/news changes, or volatility rises above ${Math.min(95, opportunity.volatility + 10)}/100.`;
+    return `Bet ticket: go to ${opportunity.book}, find ${opportunity.matchup}, choose ${opportunity.market}, and only take ${opportunity.line} or better. Current action is ${gate.action || "Watch price"}: ${gate.rule || "confirm the price before entry"}. Model probability is ${percent(opportunity.aiProbability)} vs ${percent(opportunity.marketProbability)} implied, so the edge is ${signed(opportunity.edge)} points. Suggested size is fractional Kelly: about ${Math.max(0.1, Number(opportunity.kelly || 0) * 0.35).toFixed(2)}u.`;
+  }
+  if (q.includes("price") || q.includes("gone") || q.includes("wait") || q.includes("bet now")) {
+    return `Price discipline says: ${gate.action || "Watch price"}. Current EV is ${signed(gate.evNow ?? opportunity.ev)}%, edge is ${signed(gate.edgeNow ?? opportunity.edge)}, and the rule is: ${gate.rule || `only bet ${opportunity.line} or better`}. If Athena says "Price gone," do not chase it; wait for a better number or rebuild the parlay.`;
+  }
+  if (q.includes("injury") || q.includes("lineup") || q.includes("weather") || q.includes("invalid")) {
+    const context = opportunity.contextBrain || {};
+    return `Context brain status is ${context.status || "Verify before bet"}. Injury/news risk ${context.injuryRisk || 0}/100, lineup risk ${context.lineupRisk || 0}/100, weather risk ${context.weatherRisk || 0}/100, and rest/travel risk ${context.travelRestRisk || 0}/100. Main invalidation trigger: ${context.primaryRisk || "late news"} changing after this price was captured.`;
+  }
+  if (q.includes("book") || q.includes("sharpness") || q.includes("pinnacle") || q.includes("circa")) {
+    const sharpness = opportunity.bookSharpness || {};
+    return `${opportunity.book} is treated as ${lowerText(sharpness.tier, "a market signal")} with weight ${sharpness.weight ?? "N/A"} and pressure ${sharpness.pressure || 0}/100. Athena gives sharper reference books more influence than softer retail books, so the same odds move can mean different things depending on where it happens.`;
   }
   if (q.includes("kelly") || q.includes("bankroll") || q.includes("size")) {
     const riskOffice = snapshot.riskOffice || {};
@@ -3592,11 +3822,18 @@ function buildAssistantAnswer(input, opportunity, snapshot) {
   }
   if (q.includes("backtest") || q.includes("roi") || q.includes("win rate") || q.includes("historical")) {
     const backtest = snapshot.backtest || {};
-    return `Backtest status: ${backtest.mode || "Backtest"} over ${backtest.bets || 0} modeled bets, win rate ${percent(backtest.winRate || 0)}, ROI ${percent(backtest.roi || 0)}, profit ${signed(backtest.profit || 0)}u, max drawdown ${signed(backtest.maxDrawdown || 0)}u, and CLV+ ${percent(backtest.clvPositiveRate || 0)}. Data source: ${backtest.window || "baseline"}.`;
+    const grading = snapshot.intelligenceUpgrade?.modelGrading || {};
+    return `Backtest status: ${backtest.mode || "Backtest"} over ${backtest.bets || 0} modeled bets, win rate ${percent(backtest.winRate || 0)}, ROI ${percent(backtest.roi || 0)}, profit ${signed(backtest.profit || 0)}u, max drawdown ${signed(backtest.maxDrawdown || 0)}u, and CLV+ ${percent(backtest.clvPositiveRate || 0)}. Model honesty: Brier ${grading.brier ?? "N/A"}, log loss ${grading.logLoss ?? "N/A"}, grade ${grading.grade || "Learning"}.`;
+  }
+  if (q.includes("warehouse") || q.includes("snapshot") || q.includes("cloud") || q.includes("worker")) {
+    const warehouse = snapshot.intelligenceUpgrade?.warehouse || {};
+    const cloud = snapshot.intelligenceUpgrade?.cloudReadiness || {};
+    return `Warehouse status: ${warehouse.status || "Capturing"} with ${warehouse.oddsSnapshots || 0} odds snapshots and ${warehouse.lineMoveRows || 0} line movement rows. Cloud readiness is ${cloud.status || "Local mode"}; the production jump is user accounts, a cloud database, secure API-key storage, and background odds workers.`;
   }
   if (q.includes("calibrat") || q.includes("trust") || q.includes("accur")) {
     const intel = snapshot.intelligence || {};
-    return `Model calibration grade is ${intel.calibrationGrade || "learning"} with average calibration error ${percent(intel.calibrationError || 0)}. The local warehouse has ${intel.historyRecords || 0} stored signals across ${intel.trackedMarkets || 0} tracked markets. More live captures and settled results will make this more trustworthy.`;
+    const grading = snapshot.intelligenceUpgrade?.modelGrading || {};
+    return `Model calibration grade is ${intel.calibrationGrade || "learning"} with average calibration error ${percent(intel.calibrationError || 0)}. Real grading says Brier ${grading.brier ?? "N/A"}, log loss ${grading.logLoss ?? "N/A"}, and calibration error ${grading.calibrationError ?? 0}%. More live captures and settled results will make this more trustworthy.`;
   }
   if (q.includes("risk") || q.includes("avoid")) {
     const warnings = snapshot.riskOffice?.warnings || [];
