@@ -66,14 +66,17 @@ const percent = (value, digits = 1) => `${Number(value).toFixed(digits)}%`;
 const signed = (value, digits = 1) => `${value > 0 ? "+" : ""}${Number(value).toFixed(digits)}`;
 const lowerText = (value, fallback = "unknown") => String(value ?? fallback).toLowerCase();
 const average = (items, getter) => items.length ? items.reduce((sum, item) => sum + getter(item), 0) / items.length : 0;
+const clampValue = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
 
 const WORKSPACES = [
   { id: "command", label: "Command", icon: Gauge },
+  { id: "brain", label: "Brain", icon: BrainCircuit },
   { id: "scanner", label: "Scanner", icon: Search },
   { id: "model", label: "Model Lab", icon: LineChart },
   { id: "props", label: "Props", icon: Trophy },
   { id: "parlays", label: "Parlays", icon: BadgeDollarSign },
-  { id: "parlaybt", label: "Parlay BT", icon: BarChart3 },
+  { id: "parlaybt", label: "Parlay Backtest", icon: BarChart3 },
+  { id: "portfolio", label: "Portfolio", icon: CircleDollarSign },
   { id: "risk", label: "Risk", icon: ShieldCheck },
   { id: "assistant", label: "Assistant", icon: MessageSquareText },
 ];
@@ -264,6 +267,9 @@ class TerminalErrorBoundary extends React.Component {
 }
 
 function WorkspaceRouter({ activeView, snapshot, selected, setSelectedId, messages, query, setQuery, sendMessage }) {
+  if (activeView === "brain") {
+    return <IntelligenceBrainWorkspace snapshot={snapshot} selected={selected} setSelectedId={setSelectedId} />;
+  }
   if (activeView === "scanner") {
     return <MarketScannerWorkspace snapshot={snapshot} selected={selected} setSelectedId={setSelectedId} />;
   }
@@ -278,6 +284,9 @@ function WorkspaceRouter({ activeView, snapshot, selected, setSelectedId, messag
   }
   if (activeView === "parlaybt") {
     return <ParlayBacktestWorkspace snapshot={snapshot} />;
+  }
+  if (activeView === "portfolio") {
+    return <PortfolioWorkspace snapshot={snapshot} />;
   }
   if (activeView === "risk") {
     return <RiskOfficeWorkspace snapshot={snapshot} />;
@@ -344,6 +353,7 @@ function CommandCenterWorkspace({ snapshot, selected, setSelectedId, messages, q
       </section>
 
       <aside className="min-w-0 space-y-3">
+        <IntelligenceBrainPanel snapshot={snapshot} selected={selected} compact />
         <MarketDetection snapshot={snapshot} />
         <AISynthesis opportunity={selected} snapshot={snapshot} />
         <Assistant
@@ -357,20 +367,133 @@ function CommandCenterWorkspace({ snapshot, selected, setSelectedId, messages, q
   );
 }
 
-function WorkspaceTabs({ activeView, onSelect }) {
+function IntelligenceBrainWorkspace({ snapshot, selected, setSelectedId }) {
+  const brain = useMemo(() => buildIntelligenceBrain(snapshot, selected), [snapshot, selected?.id]);
   return (
-    <div className="border-b border-white/10 bg-black/20 px-3 py-2 md:hidden">
-      <div className="flex gap-2 overflow-x-auto">
+    <div className="space-y-3 p-3">
+      <WorkspaceHeader
+        icon={BrainCircuit}
+        title="Intelligence Brain"
+        subtitle="The command layer that turns odds, market memory, backtests, parlays, risk limits, and model calibration into an actionable betting plan."
+        stat={brain.decision}
+      />
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
+        <IntelligenceBrainPanel snapshot={snapshot} selected={selected} />
+        <Panel icon={Target} title="Brain Action Routes" action={<span className="status-pill mono text-[10px]">{brain.confidence}/100 confidence</span>}>
+          <div className="grid gap-3 p-3">
+            {brain.routes.map((route) => (
+              <button
+                key={route.id}
+                onClick={() => route.sourceId ? setSelectedId(route.sourceId) : undefined}
+                className="rounded-lg border border-white/10 bg-white/[0.035] p-3 text-left transition hover:border-cyan-300/40 hover:bg-cyan-300/[0.06]"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <route.icon size={15} className={route.tone} />
+                      <span className="text-sm font-black text-white">{route.title}</span>
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-slate-400">{route.body}</div>
+                  </div>
+                  <div className={`mono text-xl font-black ${route.tone}`}>{route.value}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-3">
+        <BrainChecklist title="Next Best Actions" items={brain.nextActions} icon={Sparkles} />
+        <BrainChecklist title="Risk Blocks" items={brain.riskBlocks} icon={ShieldCheck} />
+        <BrainChecklist title="Data Trust" items={brain.dataTrust} icon={Radar} />
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)]">
+        <OpportunityFeed opportunities={(snapshot.opportunities || []).slice(0, 5)} selectedId={selected?.id} onSelect={setSelectedId} />
+        <OpportunityDetail opportunity={selected} />
+      </div>
+    </div>
+  );
+}
+
+function IntelligenceBrainPanel({ snapshot, selected, compact = false }) {
+  const brain = useMemo(() => buildIntelligenceBrain(snapshot, selected), [snapshot, selected?.id]);
+  return (
+    <Panel icon={BrainCircuit} title="Intelligence Brain" action={<span className="status-pill mono text-[10px]">{brain.mode}</span>}>
+      <div className="grid gap-3 p-3">
+        <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/[0.055] p-3">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-cyan-200">Primary Decision</div>
+          <div className="mt-2 text-xl font-black text-white">{brain.decision}</div>
+          <div className="mt-2 text-sm leading-6 text-slate-300">{brain.thesis}</div>
+        </div>
+        <div className="brain-signal-grid">
+          <BrainMetric label="Confidence" value={`${brain.confidence}/100`} tone="text-mint" />
+          <BrainMetric label="Risk" value={`${brain.riskScore}/100`} tone={brain.riskScore > 68 ? "text-amber-200" : "text-cyan-200"} />
+          <BrainMetric label="Data" value={brain.calibrationGrade} tone="text-cyan-200" />
+          <BrainMetric label="Exposure" value={`${brain.exposure}u`} tone="text-amber-200" />
+        </div>
+        {!compact ? (
+          <div className="grid gap-2">
+            {brain.reasons.map((reason) => (
+              <div key={reason} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-slate-300">
+                {reason}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+function BrainMetric({ label, value, tone = "text-white" }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div>
+      <div className={`mono mt-1 truncate text-lg font-black ${tone}`}>{value}</div>
+    </div>
+  );
+}
+
+function BrainChecklist({ title, items, icon: Icon }) {
+  return (
+    <Panel icon={Icon} title={title}>
+      <div className="grid gap-2 p-3">
+        {items.map((item) => (
+          <div key={item} className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-slate-300">
+            {item}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function WorkspaceTabs({ activeView, onSelect }) {
+  const active = WORKSPACES.find((workspace) => workspace.id === activeView) || WORKSPACES[0];
+  return (
+    <div className="mobile-workspace-nav md:hidden">
+      <label className="mobile-workspace-select">
+        <span>Workspace</span>
+        <select value={activeView} onChange={(event) => onSelect(event.target.value)}>
+          {WORKSPACES.map(({ id, label }) => (
+            <option key={id} value={id}>{label}</option>
+          ))}
+        </select>
+      </label>
+      <div className="mobile-workspace-grid">
         {WORKSPACES.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             onClick={() => onSelect(id)}
-            className={`status-pill mono text-[10px] ${activeView === id ? "border-cyan-300/50 bg-cyan-300/15 text-white" : ""}`}
+            className={`mobile-workspace-button ${activeView === id ? "active" : ""}`}
           >
             <Icon size={13} />
             {label}
           </button>
         ))}
+      </div>
+      <div className="mt-2 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.045] px-3 py-2 text-xs text-slate-300">
+        Current: <span className="font-bold text-white">{active.label}</span>
       </div>
     </div>
   );
@@ -1144,6 +1267,81 @@ function RiskOfficeWorkspace({ snapshot }) {
   );
 }
 
+function PortfolioWorkspace({ snapshot }) {
+  const profile = useMemo(() => buildPortfolioProfile(snapshot), [snapshot]);
+  return (
+    <div className="space-y-3 p-3">
+      <WorkspaceHeader
+        icon={CircleDollarSign}
+        title="Portfolio Analytics"
+        subtitle="Bankroll desk view for exposure, concentration, drawdown, Kelly sizing, allocation, backtest health, and risk-adjusted performance."
+        stat={`${profile.totalKelly}u active exposure`}
+      />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <ScannerMetric label="Risk Score" value={`${profile.riskScore}/100`} sub={profile.guardrailStatus} icon={ShieldCheck} />
+        <ScannerMetric label="Kelly Exposure" value={`${profile.totalKelly}u`} sub={`${profile.maxSingle}u max single`} icon={BadgeDollarSign} />
+        <ScannerMetric label="Backtest ROI" value={percent(profile.roi || 0)} sub={`${profile.winRate}% win rate`} icon={TrendingUp} />
+        <ScannerMetric label="Drawdown" value={`${signed(profile.drawdown)}u`} sub={`Sharpe ${profile.sharpe}`} icon={AreaChart} />
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
+        <BankrollAnalytics snapshot={snapshot} />
+        <Panel icon={Radar} title="Allocation Brain">
+          <div className="grid gap-3 p-3">
+            <PortfolioAllocation title="By Sport" items={profile.bySport} />
+            <PortfolioAllocation title="By Market" items={profile.byMarket} />
+          </div>
+        </Panel>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)]">
+        <Panel icon={BadgeDollarSign} title="Exposure Ledger">
+          <div className="portfolio-ledger-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+            <div>Bet</div>
+            <div>Market</div>
+            <div>Kelly</div>
+            <div>EV</div>
+            <div>Risk</div>
+          </div>
+          <div className="max-h-[440px] overflow-y-auto">
+            {profile.ledger.map((item) => (
+              <div key={item.id} className="portfolio-ledger-grid border-b border-white/10 px-3 py-3 text-sm">
+                <div className="min-w-0">
+                  <div className="truncate font-bold text-white">{item.matchup}</div>
+                  <div className="mt-1 truncate text-[11px] text-slate-500">{item.book}</div>
+                </div>
+                <div className="truncate text-slate-300">{item.market}</div>
+                <div className="mono text-mint">{item.kelly}u</div>
+                <div className="mono text-cyan-200">{signed(item.ev)}%</div>
+                <div className="mono text-amber-200">{item.volatility}/100</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <BrainChecklist title="Portfolio Warnings" items={profile.warnings} icon={AlarmClock} />
+      </div>
+      <BacktestSummary backtest={snapshot.backtest || {}} />
+    </div>
+  );
+}
+
+function PortfolioAllocation({ title, items }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+      <div className="mb-3 text-[10px] uppercase tracking-[0.16em] text-slate-500">{title}</div>
+      <div className="grid gap-2">
+        {items.map((item) => (
+          <div key={item.label}>
+            <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+              <span className="truncate text-slate-300">{item.label}</span>
+              <span className="mono text-white">{item.units}u</span>
+            </div>
+            <MiniBar value={item.percent} tall />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AssistantWorkspace({ snapshot, selected, messages, query, setQuery, sendMessage }) {
   const prompts = [
     "Explain the best opportunity right now",
@@ -1491,6 +1689,162 @@ function frontendSportFromLeague(league = "") {
   if (value.includes("ATP") || value.includes("WTA")) return "Tennis";
   if (value.includes("EPL") || value.includes("LIGA")) return "Soccer";
   return "Sports";
+}
+
+function buildPortfolioProfile(snapshot) {
+  const opportunities = snapshot.opportunities || [];
+  const riskOffice = snapshot.riskOffice || {};
+  const backtest = snapshot.backtest || {};
+  const ledger = opportunities.slice(0, 12);
+  const totalKelly = Number(riskOffice.totalKelly ?? ledger.reduce((sum, item) => sum + Number(item.kelly || 0), 0));
+  const maxSingle = Number(riskOffice.maxSingle ?? Math.max(0, ...ledger.map((item) => Number(item.kelly || 0))));
+  const bySport = aggregatePortfolio(ledger, "sport", totalKelly);
+  const byMarket = aggregatePortfolio(ledger, "market", totalKelly);
+  const riskScore = Number(riskOffice.riskScore || 0);
+  const warnings = riskOffice.warnings?.length ? riskOffice.warnings : ["No guardrail warnings yet. Keep checking price, injury, and correlation before entry."];
+  const brainNote = riskScore > 70
+    ? "Portfolio risk is elevated. Reduce new positions, avoid correlated parlays, and keep stake sizes below fractional Kelly."
+    : totalKelly > 0
+      ? "Portfolio is active but manageable. Best use is selective straight bets first, then small parlay exposure only where correlation is intentional."
+      : "Portfolio is flat. Wait for a clean +EV ticket with current odds and a stable market timeline.";
+
+  return {
+    ledger,
+    bySport,
+    byMarket,
+    totalKelly: Number(totalKelly.toFixed(1)),
+    maxSingle: Number(maxSingle.toFixed(1)),
+    riskScore,
+    guardrailStatus: riskOffice.guardrailStatus || "Review",
+    warnings,
+    brainNote,
+    roi: Number(backtest.roi || 0),
+    winRate: Number(backtest.winRate || 0).toFixed(1),
+    drawdown: Number(backtest.maxDrawdown || 0),
+    sharpe: Number(backtest.sharpe || 0).toFixed(2),
+    bets: Number(backtest.bets || 0),
+  };
+}
+
+function aggregatePortfolio(items, key, totalKelly) {
+  const map = new Map();
+  for (const item of items) {
+    const label = item[key] || "Unknown";
+    const current = map.get(label) || { label, units: 0, count: 0, ev: 0 };
+    current.units += Number(item.kelly || 0);
+    current.count += 1;
+    current.ev += Number(item.ev || 0);
+    map.set(label, current);
+  }
+  const denominator = Math.max(0.1, totalKelly || [...map.values()].reduce((sum, item) => sum + item.units, 0));
+  return [...map.values()]
+    .map((item) => ({
+      ...item,
+      units: Number(item.units.toFixed(1)),
+      avgEv: item.count ? Number((item.ev / item.count).toFixed(1)) : 0,
+      percent: clampValue((item.units / denominator) * 100, 3, 100),
+    }))
+    .sort((a, b) => b.units - a.units);
+}
+
+function buildIntelligenceBrain(snapshot, selected) {
+  const opportunities = snapshot.opportunities || [];
+  const top = opportunities[0];
+  const target = selected || top;
+  const safest = [...opportunities]
+    .filter((item) => item.risk !== "Elevated")
+    .sort((a, b) => (b.score + b.confidence - b.volatility) - (a.score + a.confidence - a.volatility))[0] || top;
+  const live = snapshot.live?.[0];
+  const parlay = snapshot.parlays?.[0];
+  const riskOffice = snapshot.riskOffice || {};
+  const intel = snapshot.intelligence || {};
+  const riskScore = Number(riskOffice.riskScore || 0);
+  const topScore = Number(target?.score || top?.score || 0);
+  const confidence = Math.round(clampValue(
+    topScore * 0.45 +
+    Number(target?.confidence || 0) * 0.25 +
+    (100 - riskScore) * 0.18 +
+    Math.min(100, Number(intel.historyRecords || 0) / 4) * 0.12,
+    0,
+    100,
+  ));
+  const decision = riskScore > 72
+    ? "De-risk and wait for cleaner exposure"
+    : topScore >= 88
+      ? "Attack the top straight bet if price is still available"
+      : topScore >= 76
+        ? "Selective entry with smaller fractional Kelly"
+        : "Watch board and wait for stronger confirmation";
+  const thesis = target
+    ? `${target.matchup} is the current brain focus because it combines ${signed(target.ev)}% EV, ${signed(target.edge)} probability edge, ${target.confidence}/100 confidence, and ${target.marketMemory?.captures || 0} stored market captures.`
+    : "The brain is waiting for a qualifying opportunity after filters.";
+
+  return {
+    mode: riskScore > 72 ? "Protect Capital" : "Hunt Edge",
+    decision,
+    thesis,
+    confidence,
+    riskScore,
+    exposure: Number(riskOffice.totalKelly || 0),
+    calibrationGrade: intel.calibrationGrade || "Learning",
+    reasons: [
+      target ? `Best active ticket: ${target.market} ${target.line} at ${target.book}, score ${target.score}.` : "No active ticket is selected.",
+      `Portfolio guardrail: ${riskOffice.guardrailStatus || "Review"} with ${riskScore}/100 risk score.`,
+      `Data trust: ${intel.historyRecords || 0} stored signals, ${intel.trackedMarkets || 0} tracked markets, calibration ${intel.calibrationGrade || "learning"}.`,
+    ],
+    routes: [
+      {
+        id: "straight",
+        title: "Best Straight Bet",
+        body: top ? `${top.matchup} | ${top.market} ${top.line} at ${top.book}. Use this before forcing parlays.` : "No top straight bet available.",
+        value: top ? top.score : "N/A",
+        icon: Target,
+        tone: "text-mint",
+        sourceId: top?.id,
+      },
+      {
+        id: "safe",
+        title: "Safest Value",
+        body: safest ? `${safest.matchup} has controlled risk profile with ${safest.confidence}/100 confidence and ${safest.volatility}/100 volatility.` : "No controlled-risk bet available.",
+        value: safest ? `${safest.kelly}u` : "N/A",
+        icon: ShieldCheck,
+        tone: "text-cyan-200",
+        sourceId: safest?.id,
+      },
+      {
+        id: "parlay",
+        title: "Best Parlay",
+        body: parlay ? `${parlay.label}, ${parlay.legs.length} legs, ${formatAmericanOdds(parlay.americanOdds)}, ${percent(parlay.hitProbability || 0)} hit probability.` : "No parlay available.",
+        value: parlay ? parlay.parlayScore : "N/A",
+        icon: BadgeDollarSign,
+        tone: "text-amber-200",
+      },
+      {
+        id: "live",
+        title: "Live Edge Watch",
+        body: live ? `${live.matchup} momentum ${percent(live.momentum, 0)} with live win probability ${percent(live.winProbability, 0)}.` : "No live game in the current filtered board.",
+        value: live ? percent(live.winProbability, 0) : "N/A",
+        icon: Activity,
+        tone: "text-cyan-200",
+        sourceId: live?.id,
+      },
+    ],
+    nextActions: [
+      target ? `Check ${target.book} and only take ${target.line} or better.` : "Clear filters or wait for a qualifying ticket.",
+      `Keep stake near fractional Kelly, not full Kelly, while daily exposure is ${riskOffice.totalKelly || 0}u.`,
+      "Prefer straight bets first; use parlays only when the correlation warning is intentional and readable.",
+    ],
+    riskBlocks: riskOffice.warnings?.length ? riskOffice.warnings : [
+      "No current guardrail breach.",
+      "Still re-check injuries, lineups, weather, and sportsbook price before entry.",
+      "Avoid adding more legs if the bet is already exposed through another ticket.",
+    ],
+    dataTrust: [
+      `${intel.historyRecords || 0} stored pre-entry signals in the local intelligence warehouse.`,
+      `${intel.trackedMarkets || 0} markets with line-movement memory.`,
+      `Calibration grade: ${intel.calibrationGrade || "Learning"} with ${percent(intel.calibrationError || 0)} average error.`,
+    ],
+  };
 }
 
 function BacktestSummary({ backtest }) {
@@ -2305,16 +2659,20 @@ function PropEngine({ props }) {
 }
 
 function BankrollAnalytics({ snapshot }) {
+  const profile = useMemo(() => buildPortfolioProfile(snapshot), [snapshot]);
   const canvasRef = useChart((canvas) => {
-    const labels = snapshot.history.map((item) => item.label);
+    const curve = snapshot.backtest?.equityCurve?.length
+      ? snapshot.backtest.equityCurve
+      : (snapshot.history || []).map((item) => ({ label: item.label, equity: item.roi, drawdown: item.clv }));
+    const labels = curve.map((item) => item.label);
     return new Chart(canvas, {
       type: "line",
       data: {
         labels,
         datasets: [
           {
-            label: "ROI",
-            data: snapshot.history.map((item) => item.roi),
+            label: "Equity",
+            data: curve.map((item) => item.equity),
             borderColor: "#36f2a7",
             backgroundColor: "rgba(54, 242, 167, 0.12)",
             pointRadius: 0,
@@ -2322,9 +2680,9 @@ function BankrollAnalytics({ snapshot }) {
             tension: 0.35,
           },
           {
-            label: "CLV",
-            data: snapshot.history.map((item) => item.clv),
-            borderColor: "#ffcb46",
+            label: "Drawdown",
+            data: curve.map((item) => item.drawdown),
+            borderColor: "#ff4f70",
             pointRadius: 0,
             fill: false,
             tension: 0.35,
@@ -2333,30 +2691,42 @@ function BankrollAnalytics({ snapshot }) {
       },
       options: chartOptions({ yGrid: true }),
     });
-  }, [snapshot.generatedAt]);
+  }, [snapshot.backtest?.bets, snapshot.backtest?.profit, snapshot.backtest?.maxDrawdown]);
 
   return (
-    <Panel icon={CircleDollarSign} title="Portfolio Analytics">
-      <div className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_170px]">
-        <div className="chart-wrap h-[252px] min-h-[252px]">
-          <canvas ref={canvasRef} />
+    <Panel icon={CircleDollarSign} title="Portfolio Analytics" action={<span className="status-pill mono text-[10px]">{profile.guardrailStatus}</span>}>
+      <div className="grid gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_220px]">
+        <div>
+          <div className="chart-wrap h-[252px] min-h-[252px]">
+            <canvas ref={canvasRef} />
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <PortfolioAllocation title="Sport Exposure" items={profile.bySport.slice(0, 4)} />
+            <PortfolioAllocation title="Market Exposure" items={profile.byMarket.slice(0, 4)} />
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <div className="mb-3 text-[10px] uppercase tracking-[0.16em] text-slate-500">Brain Note</div>
+              <div className="text-xs leading-5 text-slate-300">{profile.brainNote}</div>
+            </div>
+          </div>
         </div>
         <div className="grid gap-2">
-          <AnalyticsBox label="Win Rate" value={percent(snapshot.bankroll.winRate)} />
-          <AnalyticsBox label="Sharpe" value={snapshot.bankroll.sharpe.toFixed(2)} />
-          <AnalyticsBox label="Drawdown" value={signed(snapshot.bankroll.drawdown)} />
-          <AnalyticsBox label="Exposure" value={percent(snapshot.bankroll.exposure)} />
+          <AnalyticsBox label="Win Rate" value={percent(profile.winRate || 0)} sub={`${profile.bets} backtest bets`} />
+          <AnalyticsBox label="Sharpe" value={profile.sharpe} sub="risk-adjusted return" />
+          <AnalyticsBox label="Drawdown" value={`${signed(profile.drawdown)}u`} sub="peak-to-trough" />
+          <AnalyticsBox label="Kelly Exposure" value={`${profile.totalKelly}u`} sub={`${profile.maxSingle}u max single`} />
+          <AnalyticsBox label="Risk Score" value={`${profile.riskScore}/100`} sub={profile.guardrailStatus} />
         </div>
       </div>
     </Panel>
   );
 }
 
-function AnalyticsBox({ label, value }) {
+function AnalyticsBox({ label, value, sub }) {
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-3">
       <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div>
       <div className="mono mt-1 text-xl font-black text-white">{value}</div>
+      {sub ? <div className="mt-1 truncate text-[11px] text-slate-500">{sub}</div> : null}
     </div>
   );
 }

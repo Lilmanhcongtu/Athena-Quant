@@ -251,6 +251,83 @@ button {
   gap: 10px;
 }
 
+.mobile-workspace-nav {
+  border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.28);
+  padding: 10px 12px;
+}
+
+.mobile-workspace-select {
+  display: grid;
+  gap: 5px;
+}
+
+.mobile-workspace-select span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mobile-workspace-select select {
+  height: 40px;
+  width: 100%;
+  border: 1px solid rgba(53, 246, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text);
+  padding: 0 10px;
+  outline: none;
+}
+
+.mobile-workspace-select option {
+  background: #07101a;
+  color: var(--text);
+}
+
+.mobile-workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mobile-workspace-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(156, 180, 214, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #c7d2e4;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mobile-workspace-button.active {
+  border-color: rgba(53, 246, 255, 0.48);
+  background: rgba(53, 246, 255, 0.12);
+  color: #ffffff;
+}
+
+.brain-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.portfolio-ledger-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.85fr) 70px 70px 74px;
+  gap: 12px;
+  align-items: center;
+}
+
 .filter-field {
   min-width: 0;
   display: grid;
@@ -499,6 +576,10 @@ button {
     grid-template-columns: repeat(4, minmax(120px, 1fr));
   }
 
+  .brain-signal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ticket-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -534,8 +615,13 @@ button {
 
   .ticket-grid,
   .market-timeline-grid,
-  .warehouse-grid {
+  .warehouse-grid,
+  .portfolio-ledger-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .brain-signal-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .table-grid > :nth-child(4),
