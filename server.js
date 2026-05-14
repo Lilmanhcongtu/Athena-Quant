@@ -38,6 +38,14 @@ const teams = [
 
 const books = ["Pinnacle", "Circa", "DraftKings", "FanDuel", "BetMGM", "Caesars", "ESPN BET", "Bet365"];
 const markets = ["Spread", "Moneyline", "Total", "Team Total", "1H Spread", "Live ML", "Player Prop", "Alt Total"];
+const sportMarkets = {
+  Basketball: ["Spread", "Moneyline", "Total", "Team Total", "Player Prop", "1H Spread"],
+  Football: ["Spread", "Moneyline", "Total", "Team Total", "Player Prop", "1H Spread"],
+  Baseball: ["Moneyline", "Run Line", "Total", "Team Total", "Player Prop"],
+  Hockey: ["Moneyline", "Puck Line", "Total", "Team Total", "Player Prop"],
+  Soccer: ["Moneyline", "Asian Handicap", "Total", "Team Total", "Player Prop"],
+  Tennis: ["Moneyline", "Game Spread", "Total Games", "Player Prop"],
+};
 const signals = ["Sharp action", "Reverse line", "Steam move", "Trap line", "Book exposure", "Public fade", "Late buyback", "Arb window"];
 const propStats = ["Points", "Assists", "Rebounds", "Shots", "Strikeouts", "Receiving yards", "Saves", "Pass attempts"];
 
@@ -143,7 +151,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-16"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-05"></script>
   </body>
 </html>`;
 
@@ -313,7 +321,9 @@ async function loadIntelligenceStore() {
     intelligenceStore = {
       ...createEmptyIntelligenceStore(),
       ...parsed,
-      odds_history: Array.isArray(parsed.odds_history) ? parsed.odds_history : [],
+      odds_history: Array.isArray(parsed.odds_history)
+        ? parsed.odds_history.filter((record) => isPlausibleLineForSport(record.line, record.sport, record.market))
+        : [],
       line_movements: parsed.line_movements && typeof parsed.line_movements === "object" ? parsed.line_movements : {},
       parlay_predictions: Array.isArray(parsed.parlay_predictions) ? parsed.parlay_predictions : [],
       parlay_legs: Array.isArray(parsed.parlay_legs) ? parsed.parlay_legs : [],
@@ -483,7 +493,8 @@ function captureIntelligenceSnapshot({ opportunities, props, parlays, now }) {
   intelligenceStore.odds_history = intelligenceStore.odds_history.slice(-MAX_HISTORY_RECORDS);
 
   for (const record of records) {
-    const moves = intelligenceStore.line_movements[record.id] || [];
+    let moves = intelligenceStore.line_movements[record.id] || [];
+    moves = moves.filter((move) => isPlausibleLineForSport(move.line, record.sport, record.market));
     const previous = moves.at(-1);
     if (!previous || previous.price !== record.price || previous.line !== record.line || previous.score !== record.score) {
       moves.push({
@@ -602,7 +613,8 @@ function attachMarketMemory(items, capturedAt) {
 }
 
 function buildOpportunityTimeline(item, capturedAt) {
-  const moves = intelligenceStore.line_movements[item.id] || [];
+  const moves = (intelligenceStore.line_movements[item.id] || [])
+    .filter((move) => isPlausibleLineForSport(move.line, item.sport, item.market));
   if (moves.length >= 2) {
     return moves.slice(-12).map((move, index) => ({
       id: `${item.id}-move-${index}`,
@@ -661,6 +673,7 @@ function buildSnapshot(frameIndex) {
   const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex: 0 });
   const riskOffice = buildRiskOffice(opportunities, parlays, backtest, parlayBacktest);
   const intelligence = buildIntelligenceSummary(backtest, riskOffice);
+  const marketSanity = buildMarketSanityReport(opportunities, props, parlays);
 
   return {
     generatedAt: now.toISOString(),
@@ -688,6 +701,7 @@ function buildSnapshot(frameIndex) {
     backtest,
     riskOffice,
     intelligence,
+    marketSanity,
     parlays,
     parlayBacktest,
     parlayModels: PARLAY_TABLE_MODELS,
@@ -822,7 +836,8 @@ function buildBacktest(opportunities) {
 }
 
 function buildPersistentBacktestSource(opportunities) {
-  const stored = intelligenceStore.odds_history || [];
+  const stored = (intelligenceStore.odds_history || [])
+    .filter((record) => isPlausibleLineForSport(record.line, record.sport, record.market));
   if (stored.length >= 40) {
     return {
       mode: "Persistent Historical Backtest",
@@ -1017,7 +1032,8 @@ function opportunity([away, home, league, sport], index, frameIndex) {
   const marketProbability = clamp(aiProbability - ev * 1.1 + wave(index, 0.4, 2.5), 21, 72);
   const edge = clamp(aiProbability - marketProbability, -3.5, 13.5);
   const volatility = clamp(22 + Math.abs(drift) * 36 + (sport === "Tennis" ? 9 : 0), 14, 78);
-  const line = lineForMarket(markets[index % markets.length], index, frameIndex);
+  const market = marketForSport(sport, index);
+  const line = lineForMarket(market, index, frameIndex, sport, { away, home, league });
   const risk = volatility > 58 ? "Elevated" : score > 86 ? "Controlled" : "Balanced";
   const label = score >= 90 ? "Elite Opportunity" : score >= 80 ? "Strong Value" : score >= 68 ? "Medium Edge" : score >= 54 ? "Risky Opportunity" : "Avoid";
 
@@ -1028,11 +1044,11 @@ function opportunity([away, home, league, sport], index, frameIndex) {
     league,
     sport,
     matchup: `${away} @ ${home}`,
-    market: markets[index % markets.length],
+    market,
     book: books[(index + frameIndex) % books.length],
     backupBook: books[(index + frameIndex + 3) % books.length],
     line,
-    fairLine: lineForMarket(markets[index % markets.length], index + 2, frameIndex + 2),
+    fairLine: lineForMarket(market, index + 2, frameIndex + 2, sport, { away, home, league }),
     score: Math.round(score),
     label,
     ev: round(ev, 1),
@@ -1046,7 +1062,7 @@ function opportunity([away, home, league, sport], index, frameIndex) {
     kelly: round(clamp(ev / Math.max(volatility, 16) * 18, 0.2, 4.8), 1),
     confidence: Math.round(clamp(score - volatility * 0.22 + edge * 1.8, 32, 97)),
     handle: `${Math.round(0.8 + Math.abs(base) * 4.2 + index * 0.18)}.${Math.round(Math.abs(drift) * 9)}M`,
-    opening: lineForMarket(markets[index % markets.length], index - 1, frameIndex - 4),
+    opening: lineForMarket(market, index - 1, frameIndex - 4, sport, { away, home, league }),
     move: round(wave(frameIndex + index, 0.37, 2.1), 1),
     tags: [
       signals[(index + frameIndex) % signals.length],
@@ -1067,25 +1083,24 @@ function opportunity([away, home, league, sport], index, frameIndex) {
 }
 
 function prop(item, index, frameIndex) {
-  const player = [
-    "J. Tatum", "N. Jokic", "A. Judge", "C. McDavid", "P. Mahomes",
-    "M. Saka", "C. Gauff", "L. Doncic", "S. Diggs", "A. Matthews",
-  ][index % 10];
-  const line = 12.5 + (index % 6) * 3 + Math.round(Math.abs(wave(frameIndex + index, 0.35, 2)) * 2) / 2;
-  const projection = line + 1.2 + wave(frameIndex + index, 0.27, 2.4);
+  const profile = propProfileForContext(item.sport, index, item);
+  const line = roundToHalf(profile.base + (index % 3) * profile.step + wave(frameIndex + index, 0.35, profile.amp));
+  const projection = line + profile.edge + wave(frameIndex + index, 0.27, profile.amp);
   const hitRate = clamp(52 + (projection - line) * 6 + wave(frameIndex + index, 0.39, 5), 41, 78);
+  const direction = projection > line ? "Over" : "Under";
   return {
     id: `${item.id}-prop`,
-    player,
+    player: profile.player,
     team: item.home,
     league: item.league,
-    market: `${propStats[index % propStats.length]} ${projection > line ? "Over" : "Under"} ${line}`,
+    sport: item.sport,
+    market: `${profile.stat} ${direction} ${line}`,
     projection: round(projection, 1),
     line: round(line, 1),
     ev: round((projection - line) * 2.8, 1),
     hitRate: round(hitRate, 1),
-    usage: round(23 + (index % 5) * 3 + wave(frameIndex + index, 0.19, 3), 1),
-    minutes: round(28 + (index % 4) * 3 + wave(frameIndex + index, 0.21, 2), 1),
+    usage: round(profile.usage + wave(frameIndex + index, 0.19, 2.5), 1),
+    minutes: round(profile.minutes + wave(frameIndex + index, 0.21, profile.minutesAmp), 1),
     correlation: index % 3 === 0 ? "Same-game tempo" : index % 3 === 1 ? "Injury-created usage" : "Defensive funnel",
     score: Math.round(clamp(item.score - 4 + (projection - line) * 3, 48, 96)),
   };
@@ -1114,6 +1129,45 @@ function buildHeatmap(frameIndex) {
       label: ["EV", "CLV", "RLM", "Steam", "Props", "Live", "Arb", "Risk", "Volume"][col],
     })),
   }));
+}
+
+function buildMarketSanityReport(opportunities, props, parlays) {
+  const invalidOpportunities = opportunities
+    .filter((item) => !isPlausibleLineForSport(item.line, item.sport, item.market))
+    .map((item) => ({
+      id: item.id,
+      matchup: item.matchup,
+      sport: item.sport,
+      market: item.market,
+      line: item.line,
+    }));
+  const invalidProps = props
+    .filter((item) => !isPlausiblePropMarket(item))
+    .map((item) => ({
+      id: item.id,
+      player: item.player,
+      league: item.league,
+      market: item.market,
+      line: item.line,
+    }));
+  const invalidParlayLegs = parlays.flatMap((parlay) => parlay.legs
+    .filter((leg) => !Number.isFinite(Number(leg.odds)) || Math.abs(Number(leg.odds)) < 100)
+    .map((leg) => ({
+      parlayId: parlay.id,
+      leg: leg.game,
+      market: leg.marketType,
+      odds: leg.odds,
+    })));
+
+  return {
+    status: invalidOpportunities.length || invalidProps.length || invalidParlayLegs.length ? "Review" : "Clean",
+    checkedMarkets: opportunities.length,
+    checkedProps: props.length,
+    checkedParlays: parlays.length,
+    invalidOpportunities,
+    invalidProps,
+    invalidParlayLegs,
+  };
 }
 
 function buildRiskOffice(opportunities, parlays, backtest, parlayBacktest) {
@@ -1189,15 +1243,310 @@ function concentrationLeader(items, key) {
     .sort((a, b) => b.count - a.count)[0] || { label: "N/A", count: 0 };
 }
 
-function lineForMarket(market, index, frameIndex) {
+function marketForSport(sport, index) {
+  const rotation = sportMarkets[sport] || markets;
+  return rotation[index % rotation.length];
+}
+
+function lineForMarket(market, index, frameIndex, sport = "Sports", context = {}) {
   if (market.includes("Moneyline") || market.includes("Live ML")) {
-    const val = Math.round((wave(index + frameIndex, 0.42, 165) + (index % 2 ? -115 : 120)) / 5) * 5;
-    return val > 0 ? `+${val}` : `${val}`;
+    return moneylinePriceForSport(sport, index, frameIndex);
   }
-  if (market.includes("Total")) return `${round(205 + (index % 9) * 4 + wave(frameIndex + index, 0.2, 6), 1)}`;
-  if (market.includes("Prop")) return `${round(17.5 + (index % 7) * 2 + wave(frameIndex, 0.33, 1.5), 1)}`;
-  const spread = round(((index % 8) - 4) * 1.5 + wave(frameIndex + index, 0.3, 1.1), 1);
-  return spread > 0 ? `+${spread}` : `${spread}`;
+  if (market.includes("Total")) return totalLineForSport(market, sport, index, frameIndex);
+  if (market.includes("Prop")) return propLineForSport(sport, index, frameIndex, context);
+  return spreadLineForSport(market, sport, index, frameIndex);
+}
+
+function moneylinePriceForSport(sport, index, frameIndex) {
+  const ranges = {
+    Basketball: [105, 245],
+    Football: [105, 260],
+    Baseball: [105, 210],
+    Hockey: [105, 230],
+    Soccer: [110, 285],
+    Tennis: [105, 240],
+  }[sport] || [105, 240];
+  const favorite = (index + Math.round(Math.abs(wave(frameIndex, 0.1, 2)))) % 2 === 0;
+  const price = Math.round((ranges[0] + Math.abs(wave(index + frameIndex, 0.42, ranges[1] - ranges[0]))) / 5) * 5;
+  return favorite ? `-${price}` : `+${price}`;
+}
+
+function totalLineForSport(market, sport, index, frameIndex) {
+  const odds = syntheticPrice(index, frameIndex);
+  const isTeamTotal = market.includes("Team Total");
+  const config = {
+    Basketball: isTeamTotal ? { base: 109.5, step: 2, amp: 3.5 } : { base: 224.5, step: 4, amp: 6 },
+    Football: isTeamTotal ? { base: 22.5, step: 1.5, amp: 2.5 } : { base: 45.5, step: 2, amp: 4 },
+    Baseball: isTeamTotal ? { base: 4.5, step: 0.5, amp: 0.9 } : { base: 8.5, step: 0.5, amp: 1.1 },
+    Hockey: isTeamTotal ? { base: 2.5, step: 0.5, amp: 0.7 } : { base: 6.0, step: 0.5, amp: 0.8 },
+    Soccer: isTeamTotal ? { base: 1.5, step: 0.25, amp: 0.35 } : { base: 2.5, step: 0.25, amp: 0.45 },
+    Tennis: isTeamTotal ? { base: 11.5, step: 0.5, amp: 1.2 } : { base: 22.5, step: 0.5, amp: 1.8 },
+  }[sport] || { base: 2.5, step: 0.5, amp: 1 };
+  const raw = config.base + (index % 3) * config.step + wave(frameIndex + index, 0.2, config.amp);
+  const line = sport === "Soccer" || sport === "Baseball" || sport === "Hockey" || sport === "Tennis"
+    ? roundToHalf(raw)
+    : round(raw, 1);
+  return `Over ${line} ${odds}`;
+}
+
+function propLineForSport(sport, index, frameIndex, context = {}) {
+  const odds = syntheticPrice(index + 2, frameIndex);
+  const profile = propProfileForContext(sport, index, context);
+  const line = roundToHalf(profile.base + (index % 3) * profile.step + wave(frameIndex, 0.33, profile.amp));
+  return `${profile.player} ${profile.stat} Over ${line} ${odds}`;
+}
+
+function spreadLineForSport(market, sport, index, frameIndex) {
+  const odds = syntheticPrice(index + 1, frameIndex);
+  if (market === "Run Line") return `${index % 2 === 0 ? "-1.5" : "+1.5"} ${index % 2 === 0 ? "+135" : "-160"}`;
+  if (market === "Puck Line") return `${index % 2 === 0 ? "-1.5" : "+1.5"} ${index % 2 === 0 ? "+145" : "-165"}`;
+  if (market === "Asian Handicap") {
+    const line = [0, -0.5, +0.5, -1, +1][Math.abs(index + Math.round(frameIndex)) % 5];
+    return `${formatSignedLine(line)} ${odds}`;
+  }
+  if (market === "Game Spread") {
+    const line = (index % 2 === 0 ? -1 : 1) * roundToHalf(1.5 + (index % 3));
+    return `${formatSignedLine(line)} ${odds}`;
+  }
+
+  const config = {
+    Basketball: { base: 1.5, step: 1.5, amp: 1.1 },
+    Football: { base: 1.5, step: 1, amp: 0.8 },
+  }[sport] || { base: 0.5, step: 0.5, amp: 0.4 };
+  const raw = config.base + (index % 5) * config.step + Math.abs(wave(frameIndex + index, 0.3, config.amp));
+  const line = (index % 2 === 0 ? -1 : 1) * roundToHalf(raw);
+  return `${formatSignedLine(line)} ${odds}`;
+}
+
+function syntheticPrice(index, frameIndex) {
+  let price = Math.round((-112 + wave(index + frameIndex, 0.31, 18)) / 5) * 5;
+  if (Math.abs(price) < 100) price = price < 0 ? -105 : 105;
+  return price > 0 ? `+${price}` : String(price);
+}
+
+function roundToHalf(value) {
+  return round(Math.round(value * 2) / 2, 1);
+}
+
+function isPlausibleLineForSport(line, sport, market) {
+  const text = String(line || "");
+  const price = extractAmericanFromLine(text);
+  if (!Number.isFinite(price) || Math.abs(price) < 100 || Math.abs(price) > 2000) return false;
+  if (String(market || "").includes("Moneyline") || String(market || "").includes("Live ML")) return true;
+  const number = firstLineNumber(text);
+  if (!Number.isFinite(number)) return false;
+  if (String(market || "").includes("Total")) return isPlausibleTotal(number, sport, market);
+  if (String(market || "").includes("Prop")) return isPlausiblePropLine(number, sport);
+  return isPlausibleSpread(number, sport);
+}
+
+function firstLineNumber(line) {
+  const match = String(line || "").match(/[+-]?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : NaN;
+}
+
+function isPlausibleTotal(number, sport, market) {
+  const team = String(market || "").includes("Team Total");
+  const ranges = {
+    Basketball: team ? [70, 150] : [150, 280],
+    Football: team ? [7, 45] : [25, 75],
+    Baseball: team ? [1.5, 8.5] : [4.5, 14.5],
+    Hockey: team ? [1.5, 5.5] : [3.5, 8.5],
+    Soccer: team ? [0.5, 4.5] : [1.5, 5.5],
+    Tennis: team ? [6.5, 28.5] : [15.5, 55.5],
+  }[sport] || [0.5, 300];
+  return Math.abs(number) >= ranges[0] && Math.abs(number) <= ranges[1];
+}
+
+function isPlausiblePropLine(number, sport) {
+  const ranges = {
+    Basketball: [2.5, 60],
+    Football: [0.5, 400],
+    Baseball: [0.5, 12],
+    Hockey: [0.5, 8],
+    Soccer: [0.5, 6],
+    Tennis: [0.5, 35],
+  }[sport] || [0.5, 200];
+  return Math.abs(number) >= ranges[0] && Math.abs(number) <= ranges[1];
+}
+
+function isPlausibleSpread(number, sport) {
+  const ranges = {
+    Basketball: 35,
+    Football: 30,
+    Baseball: 3,
+    Hockey: 3,
+    Soccer: 4,
+    Tennis: 12,
+  };
+  return Math.abs(number) <= (ranges[sport] || 40);
+}
+
+function isPlausiblePropMarket(item) {
+  const sport = item.sport || sportFromKey(item.league || "");
+  return isPlausiblePropLine(Number(item.line), sport);
+}
+
+function propProfileForContext(sport, index, context = {}) {
+  const league = String(context.league || "").toUpperCase();
+  const matchup = `${context.away || ""} ${context.home || ""} ${context.matchup || ""}`.toUpperCase();
+
+  if (sport === "Basketball") {
+    if (matchup.includes("BOS") || matchup.includes("MIA")) {
+      return [
+        { player: "J. Tatum", stat: "Points", base: 27.5, step: 1, amp: 1.1, edge: 1.4, usage: 31, minutes: 36, minutesAmp: 2 },
+        { player: "B. Adebayo", stat: "Rebounds", base: 9.5, step: 0.5, amp: 0.6, edge: 0.7, usage: 25, minutes: 35, minutesAmp: 2 },
+        { player: "J. Butler", stat: "Assists", base: 5.5, step: 0.5, amp: 0.5, edge: 0.5, usage: 28, minutes: 36, minutesAmp: 2 },
+      ][index % 3];
+    }
+    if (matchup.includes("LAL") || matchup.includes("DEN")) {
+      return [
+        { player: "N. Jokic", stat: "Assists", base: 8.5, step: 0.5, amp: 0.6, edge: 0.8, usage: 30, minutes: 35, minutesAmp: 2 },
+        { player: "L. James", stat: "Points", base: 24.5, step: 1, amp: 1.1, edge: 1.0, usage: 29, minutes: 35, minutesAmp: 2 },
+        { player: "J. Murray", stat: "3PT Made", base: 2.5, step: 0.5, amp: 0.4, edge: 0.35, usage: 27, minutes: 34, minutesAmp: 2 },
+      ][index % 3];
+    }
+    if (matchup.includes("NYK") || matchup.includes("PHI")) {
+      return [
+        { player: "J. Brunson", stat: "Points", base: 28.5, step: 1, amp: 1.2, edge: 1.2, usage: 33, minutes: 38, minutesAmp: 2 },
+        { player: "J. Embiid", stat: "Rebounds", base: 10.5, step: 0.5, amp: 0.7, edge: 0.8, usage: 34, minutes: 35, minutesAmp: 2 },
+        { player: "T. Maxey", stat: "Assists", base: 5.5, step: 0.5, amp: 0.5, edge: 0.45, usage: 27, minutes: 37, minutesAmp: 2 },
+      ][index % 3];
+    }
+    if (matchup.includes("DAL") || matchup.includes("MIN")) {
+      return [
+        { player: "L. Doncic", stat: "Points", base: 31.5, step: 1, amp: 1.3, edge: 1.4, usage: 35, minutes: 38, minutesAmp: 2 },
+        { player: "A. Edwards", stat: "Points", base: 26.5, step: 1, amp: 1.1, edge: 1.0, usage: 31, minutes: 37, minutesAmp: 2 },
+        { player: "R. Gobert", stat: "Rebounds", base: 11.5, step: 0.5, amp: 0.7, edge: 0.75, usage: 18, minutes: 34, minutesAmp: 2 },
+      ][index % 3];
+    }
+  }
+
+  if (sport === "Football") {
+    if (matchup.includes("KC") || matchup.includes("BUF")) {
+      return [
+        { player: "P. Mahomes", stat: "Passing Yards", base: 258.5, step: 8, amp: 4, edge: 7.5, usage: 100, minutes: 60, minutesAmp: 0 },
+        { player: "J. Allen", stat: "Rushing Yards", base: 38.5, step: 4, amp: 3, edge: 3.8, usage: 100, minutes: 60, minutesAmp: 0 },
+        { player: "S. Diggs", stat: "Receiving Yards", base: 62.5, step: 6, amp: 4, edge: 5.2, usage: 82, minutes: 58, minutesAmp: 1 },
+      ][index % 3];
+    }
+    if (matchup.includes("SF") || matchup.includes("DET")) {
+      return [
+        { player: "C. McCaffrey", stat: "Rushing Yards", base: 78.5, step: 5, amp: 4, edge: 4.8, usage: 88, minutes: 58, minutesAmp: 1 },
+        { player: "J. Goff", stat: "Passing Yards", base: 248.5, step: 8, amp: 4, edge: 6.4, usage: 100, minutes: 60, minutesAmp: 0 },
+        { player: "A. St. Brown", stat: "Receiving Yards", base: 72.5, step: 5, amp: 4, edge: 4.6, usage: 86, minutes: 58, minutesAmp: 1 },
+      ][index % 3];
+    }
+  }
+
+  if (sport === "Baseball") {
+    if (matchup.includes("LAD") || matchup.includes("ATL")) {
+      return [
+        { player: "M. Betts", stat: "Total Bases", base: 1.5, step: 0.5, amp: 0.25, edge: 0.35, usage: 100, minutes: 9, minutesAmp: 0 },
+        { player: "F. Freeman", stat: "Hits", base: 0.5, step: 0.5, amp: 0.2, edge: 0.28, usage: 100, minutes: 9, minutesAmp: 0 },
+        { player: "S. Strider", stat: "Strikeouts", base: 6.5, step: 0.5, amp: 0.4, edge: 0.55, usage: 100, minutes: 6, minutesAmp: 1 },
+      ][index % 3];
+    }
+    if (matchup.includes("NYY") || matchup.includes("HOU")) {
+      return [
+        { player: "A. Judge", stat: "Hits", base: 0.5, step: 0.5, amp: 0.2, edge: 0.28, usage: 100, minutes: 9, minutesAmp: 0 },
+        { player: "Y. Alvarez", stat: "Total Bases", base: 1.5, step: 0.5, amp: 0.25, edge: 0.3, usage: 100, minutes: 9, minutesAmp: 0 },
+        { player: "G. Cole", stat: "Strikeouts", base: 6.5, step: 0.5, amp: 0.4, edge: 0.5, usage: 100, minutes: 6, minutesAmp: 1 },
+      ][index % 3];
+    }
+  }
+
+  if (sport === "Hockey") {
+    if (matchup.includes("NYR") || matchup.includes("FLA")) {
+      return [
+        { player: "A. Panarin", stat: "Shots On Goal", base: 3.5, step: 0.5, amp: 0.3, edge: 0.35, usage: 32, minutes: 21, minutesAmp: 2 },
+        { player: "A. Barkov", stat: "Points", base: 0.5, step: 0.5, amp: 0.2, edge: 0.28, usage: 31, minutes: 21, minutesAmp: 2 },
+        { player: "S. Bobrovsky", stat: "Saves", base: 27.5, step: 1, amp: 1, edge: 0.8, usage: 100, minutes: 60, minutesAmp: 0 },
+      ][index % 3];
+    }
+    if (matchup.includes("EDM") || matchup.includes("VGK")) {
+      return [
+        { player: "C. McDavid", stat: "Points", base: 1.5, step: 0.5, amp: 0.25, edge: 0.3, usage: 36, minutes: 22, minutesAmp: 2 },
+        { player: "L. Draisaitl", stat: "Shots On Goal", base: 3.5, step: 0.5, amp: 0.3, edge: 0.35, usage: 34, minutes: 22, minutesAmp: 2 },
+        { player: "J. Eichel", stat: "Shots On Goal", base: 3.5, step: 0.5, amp: 0.3, edge: 0.32, usage: 33, minutes: 21, minutesAmp: 2 },
+      ][index % 3];
+    }
+  }
+
+  if (sport === "Tennis" && (league.includes("ATP") || matchup.includes("SINNER") || matchup.includes("ALCARAZ"))) {
+    return [
+      { player: "J. Sinner", stat: "Games Won", base: 12.5, step: 0.5, amp: 0.6, edge: 0.6, usage: 100, minutes: 110, minutesAmp: 16 },
+      { player: "C. Alcaraz", stat: "Aces", base: 4.5, step: 0.5, amp: 0.45, edge: 0.35, usage: 100, minutes: 112, minutesAmp: 16 },
+      { player: "C. Alcaraz", stat: "Break Points Won", base: 3.5, step: 0.5, amp: 0.35, edge: 0.35, usage: 100, minutes: 115, minutesAmp: 16 },
+    ][index % 3];
+  }
+
+  if (sport === "Tennis" && (league.includes("WTA") || matchup.includes("SWIATEK") || matchup.includes("GAUFF"))) {
+    return [
+      { player: "I. Swiatek", stat: "Games Won", base: 12.5, step: 0.5, amp: 0.6, edge: 0.65, usage: 100, minutes: 95, minutesAmp: 14 },
+      { player: "C. Gauff", stat: "Aces", base: 3.5, step: 0.5, amp: 0.4, edge: 0.4, usage: 100, minutes: 95, minutesAmp: 14 },
+      { player: "I. Swiatek", stat: "Break Points Won", base: 4.5, step: 0.5, amp: 0.35, edge: 0.35, usage: 100, minutes: 96, minutesAmp: 14 },
+    ][index % 3];
+  }
+
+  if (sport === "Soccer" && (league.includes("LIGA") || matchup.includes("MAD") || matchup.includes("BAR"))) {
+    return [
+      { player: "J. Bellingham", stat: "Shots", base: 2.5, step: 0.5, amp: 0.25, edge: 0.32, usage: 29, minutes: 88, minutesAmp: 4 },
+      { player: "R. Lewandowski", stat: "Shots On Target", base: 1.5, step: 0.5, amp: 0.2, edge: 0.24, usage: 31, minutes: 84, minutesAmp: 5 },
+      { player: "Vinicius Jr.", stat: "Fouls Drawn", base: 1.5, step: 0.5, amp: 0.25, edge: 0.3, usage: 30, minutes: 86, minutesAmp: 5 },
+    ][index % 3];
+  }
+
+  if (sport === "Soccer" && (league.includes("EPL") || matchup.includes("ARS") || matchup.includes("MCI"))) {
+    return [
+      { player: "E. Haaland", stat: "Shots On Target", base: 1.5, step: 0.5, amp: 0.2, edge: 0.28, usage: 32, minutes: 84, minutesAmp: 5 },
+      { player: "B. Saka", stat: "Shots", base: 2.5, step: 0.5, amp: 0.25, edge: 0.32, usage: 29, minutes: 86, minutesAmp: 5 },
+      { player: "K. De Bruyne", stat: "Assists", base: 0.5, step: 0.5, amp: 0.15, edge: 0.18, usage: 27, minutes: 78, minutesAmp: 7 },
+    ][index % 3];
+  }
+
+  return propProfileForSport(sport, index);
+}
+
+function propProfileForSport(sport, index) {
+  const profiles = {
+    Basketball: [
+      { player: "J. Tatum", stat: "Points", base: 24.5, step: 2, amp: 1.2, edge: 1.4, usage: 31, minutes: 36, minutesAmp: 2 },
+      { player: "N. Jokic", stat: "Assists", base: 8.5, step: 0.5, amp: 0.6, edge: 0.8, usage: 30, minutes: 35, minutesAmp: 2 },
+      { player: "L. Doncic", stat: "Rebounds", base: 8.5, step: 0.5, amp: 0.7, edge: 0.7, usage: 34, minutes: 37, minutesAmp: 2 },
+    ],
+    Football: [
+      { player: "P. Mahomes", stat: "Passing Yards", base: 258.5, step: 8, amp: 4, edge: 7.5, usage: 100, minutes: 60, minutesAmp: 0 },
+      { player: "S. Diggs", stat: "Receiving Yards", base: 62.5, step: 6, amp: 4, edge: 5.2, usage: 82, minutes: 58, minutesAmp: 1 },
+    ],
+    Baseball: [
+      { player: "M. Betts", stat: "Total Bases", base: 1.5, step: 0.5, amp: 0.25, edge: 0.35, usage: 100, minutes: 9, minutesAmp: 0 },
+      { player: "A. Judge", stat: "Hits", base: 0.5, step: 0.5, amp: 0.2, edge: 0.28, usage: 100, minutes: 9, minutesAmp: 0 },
+      { player: "S. Strider", stat: "Strikeouts", base: 6.5, step: 0.5, amp: 0.4, edge: 0.55, usage: 100, minutes: 6, minutesAmp: 1 },
+    ],
+    Hockey: [
+      { player: "C. McDavid", stat: "Shots On Goal", base: 3.5, step: 0.5, amp: 0.3, edge: 0.35, usage: 34, minutes: 22, minutesAmp: 2 },
+      { player: "A. Matthews", stat: "Points", base: 0.5, step: 0.5, amp: 0.2, edge: 0.28, usage: 32, minutes: 21, minutesAmp: 2 },
+    ],
+    Soccer: [
+      { player: "M. Salah", stat: "Shots", base: 2.5, step: 0.5, amp: 0.25, edge: 0.32, usage: 29, minutes: 86, minutesAmp: 5 },
+      { player: "E. Haaland", stat: "Shots On Target", base: 1.5, step: 0.5, amp: 0.2, edge: 0.24, usage: 31, minutes: 84, minutesAmp: 5 },
+      { player: "J. Bellingham", stat: "Fouls Drawn", base: 1.5, step: 0.5, amp: 0.25, edge: 0.3, usage: 27, minutes: 88, minutesAmp: 4 },
+    ],
+    Tennis: [
+      { player: "I. Swiatek", stat: "Games Won", base: 12.5, step: 0.5, amp: 0.6, edge: 0.65, usage: 100, minutes: 95, minutesAmp: 14 },
+      { player: "C. Gauff", stat: "Aces", base: 3.5, step: 0.5, amp: 0.4, edge: 0.4, usage: 100, minutes: 95, minutesAmp: 14 },
+      { player: "C. Alcaraz", stat: "Break Points Won", base: 3.5, step: 0.5, amp: 0.35, edge: 0.35, usage: 100, minutes: 115, minutesAmp: 16 },
+    ],
+  }[sport] || [
+    { player: "Featured Player", stat: "Player Prop", base: 2.5, step: 0.5, amp: 0.25, edge: 0.3, usage: 50, minutes: 30, minutesAmp: 2 },
+  ];
+  return profiles[index % profiles.length];
+}
+
+function formatSignedLine(value) {
+  if (Object.is(value, -0) || value === 0) return "0";
+  return value > 0 ? `+${round(value, 1)}` : `${round(value, 1)}`;
 }
 
 function bookmakerEntries(odd) {
