@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/react@18.2.0";
 import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
-import { AnimatePresence, motion } from "https://esm.sh/framer-motion@11.3.19?deps=react@18.2.0,react-dom@18.2.0";
 import {
   Activity,
   AlarmClock,
@@ -188,8 +187,8 @@ function App() {
         <main className="min-w-0 flex-1">
           <TopBar snapshot={snapshot} connected={connected} />
           <div className="border-y border-white/10 bg-black/20 overflow-hidden">
-            <div className="ticker flex w-[2200px] gap-8 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-300 mono">
-              {[...tickerItems, ...tickerItems].map((item, index) => (
+            <div className="ticker flex gap-6 overflow-x-auto py-2 text-[11px] uppercase tracking-[0.16em] text-slate-300 mono">
+              {tickerItems.map((item, index) => (
                 <span key={`${item}-${index}`} className="whitespace-nowrap">
                   <span className="text-cyan-300">AQX</span> {item}
                 </span>
@@ -1097,6 +1096,16 @@ function TableStat({ label, value, tone = "text-white" }) {
   );
 }
 
+function FeedDetailStat({ label, value, sub, tone = "text-white" }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-white/10 bg-white/[0.035] px-2 py-2">
+      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</div>
+      <div className={`mono mt-1 truncate text-sm font-black ${tone}`}>{value}</div>
+      {sub ? <div className="mt-1 truncate text-[10px] text-slate-500">{sub}</div> : null}
+    </div>
+  );
+}
+
 function ParlayMiniStat({ label, value, tone = "text-white" }) {
   return (
     <div className="rounded-lg border border-white/10 bg-black/20 px-2 py-2">
@@ -1472,13 +1481,9 @@ function MetricStrip({ snapshot }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
       {metrics.map(([label, value, sub, Icon, tone]) => (
-        <motion.div
+        <div
           key={label}
-          layout
-          className="metric-tile scan-line"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35 }}
+          className="metric-tile"
         >
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
@@ -1486,7 +1491,7 @@ function MetricStrip({ snapshot }) {
           </div>
           <div className="mt-2 mono text-2xl font-black text-white">{value}</div>
           <div className="mt-1 truncate text-xs text-slate-400">{sub}</div>
-        </motion.div>
+        </div>
       ))}
     </div>
   );
@@ -1497,58 +1502,86 @@ function OpportunityFeed({ opportunities, selectedId, onSelect }) {
     <Panel
       icon={Zap}
       title="Real-Time Opportunity Feed"
+      action={<span className="status-pill mono text-[10px]">Rows locked | numbers update</span>}
     >
-      <div className="table-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
-        <div>Market</div>
-        <div>Score</div>
-        <div>EV</div>
-        <div>Sharp</div>
-        <div>CLV</div>
-        <div>Book</div>
-        <div>Risk</div>
+      <div className="feed-card-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+        <div>Bet Ticket</div>
+        <div>Model Edge</div>
+        <div>Market Price</div>
+        <div>Risk / Sizing</div>
       </div>
-      <div className="max-h-[562px] overflow-y-auto">
-        <AnimatePresence initial={false}>
-          {opportunities.map((item) => (
-            <motion.button
-              layout
+      <div className="max-h-[680px] overflow-y-auto">
+        {opportunities.map((item) => {
+          const selected = selectedId === item.id;
+          return (
+            <button
               key={item.id}
               onClick={() => onSelect(item.id)}
-              className={`terminal-row table-grid w-full px-3 py-2 text-left ${selectedId === item.id ? "bg-cyan-300/[0.08]" : ""}`}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.28 }}
+              className={`terminal-row w-full px-3 py-3 text-left ${selected ? "bg-cyan-300/[0.08]" : ""}`}
             >
-              <div className="min-w-0">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${item.score > 88 ? "bg-mint shadow-[0_0_18px_rgba(54,242,167,0.9)]" : item.score > 76 ? "bg-cyan-300" : "bg-amber-300"}`} />
-                  <span className="truncate text-sm font-semibold text-white">{item.matchup}</span>
+              <div className="feed-card-grid">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${item.score > 88 ? "bg-mint shadow-[0_0_18px_rgba(54,242,167,0.9)]" : item.score > 76 ? "bg-cyan-300" : "bg-amber-300"}`} />
+                    <span className="truncate text-sm font-black text-white">{item.matchup}</span>
+                  </div>
+                  <div className="mt-2 flex min-w-0 flex-wrap gap-2 text-[11px] text-slate-400">
+                    <span className="status-pill mono text-[10px]">{item.league}</span>
+                    <span className="status-pill mono text-[10px]">{item.sport}</span>
+                    <span className="status-pill mono text-[10px]">{item.market}</span>
+                  </div>
+                  <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.045] px-3 py-2 text-xs leading-5 text-slate-200">
+                    Bet: <span className="font-bold text-white">{item.market} {item.line}</span> at <span className="text-cyan-200">{item.book}</span>
+                  </div>
                 </div>
-                <div className="mt-1 flex min-w-0 flex-wrap gap-2 text-[11px] text-slate-400">
-                  <span className="mono text-cyan-200">{item.league}</span>
-                  <span>{item.market}</span>
-                  <span className="mono">{item.line}</span>
+
+                <div className="feed-stat-grid">
+                  <FeedDetailStat label="Score" value={item.score} sub={item.label} />
+                  <FeedDetailStat label="AI prob" value={percent(item.aiProbability)} sub="model win rate" tone="text-cyan-200" />
+                  <FeedDetailStat label="EV" value={`${signed(item.ev)}%`} sub="expected value" tone="text-mint" />
+                  <FeedDetailStat label="Edge" value={signed(item.edge)} sub="model gap" tone="text-mint" />
+                </div>
+
+                <div className="feed-stat-grid">
+                  <FeedDetailStat label="Current" value={item.line} sub={item.book} />
+                  <FeedDetailStat label="Fair line" value={item.fairLine} sub={`CLV ${signed(item.clv)}`} tone="text-amber-200" />
+                  <FeedDetailStat label="Opening" value={item.opening} sub={`move ${signed(item.move)}`} />
+                  <FeedDetailStat label="Market" value={percent(item.marketProbability)} sub={`sharp ${item.sharp}%`} tone="text-cyan-200" />
+                </div>
+
+                <div className="min-w-0">
+                  <div className="grid grid-cols-2 gap-2">
+                    <FeedDetailStat label="Kelly" value={`${item.kelly}u`} sub="stake cap" tone="text-mint" />
+                    <FeedDetailStat label="Risk" value={item.risk} sub={`${item.volatility}/100 vol`} tone={item.risk === "Elevated" ? "text-amber-200" : "text-slate-100"} />
+                  </div>
+                  <div className="mt-3">
+                    <div className="mb-1 flex justify-between text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                      <span>Confidence</span>
+                      <span className="mono text-slate-300">{item.confidence}/100</span>
+                    </div>
+                    <MiniBar value={item.confidence} tall />
+                  </div>
+                  <div className="mt-2 truncate rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-slate-400">
+                    Compare: {item.backupBook}
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="mono text-lg font-black text-white">{item.score}</div>
-                <div className="truncate text-[10px] text-slate-500">{item.label}</div>
+
+              <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(210px,0.4fr)]">
+                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-slate-300">
+                  {buildFeedBetBrief(item)}
+                </div>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  {(item.tags || []).slice(0, 3).map((tag) => (
+                    <span key={tag} className="rounded-lg border border-white/10 bg-white/[0.035] px-2 py-1 text-[10px] text-slate-300">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="mono text-sm font-bold text-mint">{signed(item.ev)}</div>
-              <div>
-                <div className="mono text-sm text-cyan-200">{item.sharp}%</div>
-                <MiniBar value={item.sharp} />
-              </div>
-              <div className="mono text-sm text-amber-200">{signed(item.clv)}</div>
-              <div className="min-w-0">
-                <div className="truncate text-xs text-slate-200">{item.book}</div>
-                <div className="truncate text-[10px] text-slate-500">alt {item.backupBook}</div>
-              </div>
-              <div className="text-xs text-slate-300">{item.risk}</div>
-            </motion.button>
-          ))}
-        </AnimatePresence>
+            </button>
+          );
+        })}
       </div>
     </Panel>
   );
@@ -1702,6 +1735,18 @@ function buildOpportunityThesis(opportunity) {
   return `${opportunity.market} at ${opportunity.book} is priced ${edgeDirection} market fair value: the model projects ${percent(opportunity.aiProbability)} against ${percent(opportunity.marketProbability)} implied. That creates ${signed(opportunity.ev)}% EV, ${signed(opportunity.edge)} points of probability edge, and ${signed(opportunity.clv)} projected closing-line value based on ${source}.`;
 }
 
+function buildFeedBetBrief(item) {
+  const edgeText = item.edge >= 0
+    ? `${signed(item.edge)} points above market implied probability`
+    : `${signed(item.edge)} points below market implied probability`;
+  const action = item.score >= 88
+    ? "Priority watch/play if the price is still available."
+    : item.score >= 76
+      ? "Playable at listed price; reduce stake if the line worsens."
+      : "Small stake or watch until confirmation improves.";
+  return `${action} Model is ${percent(item.aiProbability)} vs ${percent(item.marketProbability)} market-implied, giving ${edgeText}, ${signed(item.ev)}% EV, and ${signed(item.clv)} projected CLV. Invalidate if the line moves away from ${item.line} or late news increases volatility.`;
+}
+
 function buildRiskNotes(opportunity) {
   const notes = [
     `Entry discipline: take this only if the line is still near ${opportunity.line} and the opportunity score remains above ${Math.max(60, opportunity.score - 8)}.`,
@@ -1783,8 +1828,7 @@ function LiveEngine({ live }) {
     <Panel icon={Activity} title="Live AI Betting Engine" action={<span className="status-pill mono text-[10px]">2s RECALC</span>}>
       <div className="grid max-h-[360px] gap-2 overflow-y-auto p-3">
         {live.map((item) => (
-          <motion.div
-            layout
+          <div
             key={item.id}
             className="grid gap-3 rounded-lg border border-white/10 bg-white/[0.035] p-3 sm:grid-cols-[minmax(130px,1fr)_86px_86px_minmax(84px,0.7fr)]"
           >
@@ -1801,7 +1845,7 @@ function LiveEngine({ live }) {
               <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">EV Shift</div>
               <Sparkline values={item.micro} />
             </div>
-          </motion.div>
+          </div>
         ))}
       </div>
     </Panel>

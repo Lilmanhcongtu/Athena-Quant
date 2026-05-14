@@ -70,6 +70,10 @@ let oddsState = {
   requestsRemaining: null,
   error: null,
 };
+const opportunityBoardOrder = new Map();
+const parlayBoardOrder = new Map();
+let opportunityOrderCursor = 0;
+let parlayOrderCursor = 0;
 
 const html = `<!doctype html>
 <html lang="en">
@@ -120,7 +124,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-9"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-11"></script>
   </body>
 </html>`;
 
@@ -356,6 +360,26 @@ function dedupeEvents(events) {
   return Array.from(map.values());
 }
 
+function lockOpportunityBoardOrder(items) {
+  for (const item of items) {
+    if (!opportunityBoardOrder.has(item.id)) {
+      opportunityBoardOrder.set(item.id, opportunityOrderCursor);
+      opportunityOrderCursor += 1;
+    }
+  }
+  return [...items].sort((a, b) => opportunityBoardOrder.get(a.id) - opportunityBoardOrder.get(b.id));
+}
+
+function lockParlayBoardOrder(items) {
+  for (const item of items) {
+    if (!parlayBoardOrder.has(item.id)) {
+      parlayBoardOrder.set(item.id, parlayOrderCursor);
+      parlayOrderCursor += 1;
+    }
+  }
+  return [...items].sort((a, b) => parlayBoardOrder.get(a.id) - parlayBoardOrder.get(b.id));
+}
+
 function buildSnapshot(frameIndex) {
   const now = new Date();
   const realOpportunities = oddsState.events
@@ -363,14 +387,14 @@ function buildSnapshot(frameIndex) {
     .sort((a, b) => b.score - a.score);
   const demoOpportunities = teams.map((match, index) => opportunity(match, index, frameIndex))
     .sort((a, b) => b.score - a.score);
-  const opportunities = (realOpportunities.length ? realOpportunities : demoOpportunities).slice(0, 80);
+  const opportunities = lockOpportunityBoardOrder(realOpportunities.length ? realOpportunities : demoOpportunities).slice(0, 80);
   const liveGames = oddsState.events.length || (284 + Math.round(wave(frameIndex, 0.2, 21)));
   const bookCount = realOpportunities.length
     ? new Set(realOpportunities.map((item) => item.book)).size
     : books.length;
   const backtest = buildBacktest(opportunities, frameIndex);
   const props = opportunities.slice(2, 10).map((item, index) => prop(item, index, frameIndex));
-  const parlays = generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() });
+  const parlays = lockParlayBoardOrder(generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() }));
   const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex });
 
   return {

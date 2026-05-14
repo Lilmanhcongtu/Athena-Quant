@@ -212,6 +212,19 @@ button {
   grid-template-columns: minmax(154px, 1.35fr) minmax(84px, 0.7fr) minmax(72px, 0.55fr) minmax(64px, 0.52fr) minmax(68px, 0.58fr) minmax(84px, 0.72fr) minmax(74px, 0.6fr);
 }
 
+.feed-card-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.95fr) minmax(230px, 1fr) minmax(230px, 1fr) minmax(190px, 0.78fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.feed-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .prop-grid {
   display: grid;
   grid-template-columns: minmax(112px, 1fr) minmax(156px, 1.3fr) minmax(72px, 0.6fr) minmax(70px, 0.55fr) minmax(74px, 0.6fr);
@@ -291,7 +304,7 @@ button {
 }
 
 .ticker {
-  animation: ticker 28s linear infinite;
+  animation: none;
 }
 
 .heat-cell {
@@ -389,6 +402,10 @@ button {
     grid-template-columns: minmax(160px, 1.2fr) minmax(82px, 0.8fr) minmax(70px, 0.6fr) minmax(68px, 0.6fr);
   }
 
+  .feed-card-grid {
+    grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  }
+
   .table-grid > :nth-child(5),
   .table-grid > :nth-child(6),
   .table-grid > :nth-child(7) {
@@ -408,6 +425,10 @@ button {
 
   .table-grid {
     grid-template-columns: minmax(150px, 1fr) 70px 64px;
+  }
+
+  .feed-card-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .table-grid > :nth-child(4),
