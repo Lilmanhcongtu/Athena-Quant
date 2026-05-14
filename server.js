@@ -24,16 +24,34 @@ const teams = [
   ["LAL", "DEN", "NBA", "Basketball"],
   ["NYK", "PHI", "NBA", "Basketball"],
   ["DAL", "MIN", "NBA", "Basketball"],
+  ["LV", "NYL", "WNBA", "Basketball"],
+  ["DUKE", "UNC", "NCAAB", "Basketball"],
+  ["UCONN", "KU", "NCAAB", "Basketball"],
   ["KC", "BUF", "NFL", "Football"],
   ["SF", "DET", "NFL", "Football"],
+  ["UGA", "ALA", "NCAAF", "Football"],
+  ["MICH", "OSU", "NCAAF", "Football"],
+  ["TOR", "WPG", "CFL", "Football"],
   ["LAD", "ATL", "MLB", "Baseball"],
   ["NYY", "HOU", "MLB", "Baseball"],
+  ["FUK", "YOM", "NPB", "Baseball"],
+  ["DOO", "LG", "KBO", "Baseball"],
   ["NYR", "FLA", "NHL", "Hockey"],
   ["EDM", "VGK", "NHL", "Hockey"],
+  ["SKA", "CSKA", "KHL", "Hockey"],
   ["ARS", "MCI", "EPL", "Soccer"],
   ["MAD", "BAR", "La Liga", "Soccer"],
+  ["LAFC", "MIA", "MLS", "Soccer"],
+  ["PSG", "BAY", "UEFA Champions League", "Soccer"],
+  ["BAY", "BVB", "Bundesliga", "Soccer"],
+  ["INT", "JUV", "Serie A", "Soccer"],
+  ["AME", "TIG", "Liga MX", "Soccer"],
   ["Swiatek", "Gauff", "WTA", "Tennis"],
   ["Sinner", "Alcaraz", "ATP", "Tennis"],
+  ["Makhachev", "Topuria", "UFC", "MMA"],
+  ["O'Malley", "Dvalishvili", "UFC", "MMA"],
+  ["Scheffler", "McIlroy", "PGA Men", "Golf"],
+  ["Ko", "Korda", "PGA Women", "Golf"],
 ];
 
 const books = ["Pinnacle", "Circa", "DraftKings", "FanDuel", "BetMGM", "Caesars", "ESPN BET", "Bet365"];
@@ -45,6 +63,8 @@ const sportMarkets = {
   Hockey: ["Moneyline", "Puck Line", "Total", "Team Total", "Player Prop"],
   Soccer: ["Moneyline", "Asian Handicap", "Total", "Team Total", "Player Prop"],
   Tennis: ["Moneyline", "Game Spread", "Total Games", "Player Prop"],
+  MMA: ["Moneyline", "Fight Total", "Method Prop", "Round Prop"],
+  Golf: ["Tournament Winner", "Top 10", "Matchup", "Round Score", "Player Prop"],
 };
 const signals = ["Sharp action", "Reverse line", "Steam move", "Trap line", "Book exposure", "Public fade", "Late buyback", "Arb window"];
 const propStats = ["Points", "Assists", "Rebounds", "Shots", "Strikeouts", "Receiving yards", "Saves", "Pass attempts"];
@@ -53,12 +73,34 @@ let tick = 0;
 const clients = new Set();
 const ODDS_API_KEY = process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || "";
 const ODDS_BASE_URL = "https://api.sportsgameodds.com/v2";
-const ODDS_REFRESH_MS = Number(process.env.ODDS_REFRESH_MS || 30000);
-const ODDS_LEAGUES = (process.env.ODDS_LEAGUES || "NBA,NFL,MLB,NHL")
+const DEFAULT_ODDS_LEAGUES = [
+  "NBA",
+  "NFL",
+  "MLB",
+  "NHL",
+  "NCAAF",
+  "NCAAB",
+  "WNBA",
+  "EPL",
+  "MLS",
+  "UEFA_CHAMPIONS_LEAGUE",
+  "LA_LIGA",
+  "BUNDESLIGA",
+  "IT_SERIE_A",
+  "FR_LIGUE_1",
+  "LIGA_MX",
+  "ATP",
+  "WTA",
+  "UFC",
+  "PGA_MEN",
+].join(",");
+const ODDS_REFRESH_MS = Number(process.env.ODDS_REFRESH_MS || 5 * 60 * 1000);
+const ODDS_RATE_LIMIT_BACKOFF_MS = Number(process.env.ODDS_RATE_LIMIT_BACKOFF_MS || 30 * 60 * 1000);
+const ODDS_LEAGUES = (process.env.ODDS_LEAGUES || DEFAULT_ODDS_LEAGUES)
   .split(",")
   .map((league) => league.trim())
   .filter(Boolean);
-const ODDS_LIMIT = Number(process.env.ODDS_LIMIT || 12);
+const ODDS_LIMIT = Number(process.env.ODDS_LIMIT || 24);
 const INTELLIGENCE_STORE_PATH = join(ROOT, "data", "athena-intelligence-store.json");
 const HISTORY_CAPTURE_MS = Number(process.env.HISTORY_CAPTURE_MS || 15000);
 const MAX_HISTORY_RECORDS = 1400;
@@ -86,6 +128,7 @@ let oddsState = {
   leagues: ODDS_LEAGUES,
   lastFetchAt: null,
   nextFetchAt: null,
+  rateLimitResetAt: null,
   requestsUsed: null,
   requestsRemaining: null,
   error: null,
@@ -151,7 +194,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-07"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-08"></script>
   </body>
 </html>`;
 
@@ -361,6 +404,20 @@ async function saveIntelligenceStore() {
 }
 
 async function refreshOdds() {
+  if (oddsState.rateLimitResetAt) {
+    const resetAt = Date.parse(oddsState.rateLimitResetAt);
+    if (Number.isFinite(resetAt) && resetAt > Date.now()) {
+      oddsState = {
+        ...oddsState,
+        status: "error",
+        nextFetchAt: oddsState.rateLimitResetAt,
+        error: `SportsGameOdds rate limit cooling down. Next retry at ${new Date(resetAt).toLocaleTimeString()}.`,
+      };
+      return;
+    }
+    oddsState = { ...oddsState, rateLimitResetAt: null };
+  }
+
   const startedAt = Date.now();
   try {
     const result = await fetchSportsGameOddsEvents();
@@ -376,6 +433,7 @@ async function refreshOdds() {
         events: dedupeEvents(events),
         lastFetchAt: new Date().toISOString(),
         nextFetchAt: new Date(Date.now() + ODDS_REFRESH_MS).toISOString(),
+        rateLimitResetAt: null,
         error: result.notice || null,
       };
       return;
@@ -386,15 +444,25 @@ async function refreshOdds() {
       status: "empty",
       lastFetchAt: new Date().toISOString(),
       nextFetchAt: new Date(Date.now() + ODDS_REFRESH_MS).toISOString(),
+      rateLimitResetAt: null,
       error: "SportsGameOdds returned no events for the configured leagues.",
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to fetch odds.";
+    const isRateLimited = getErrorStatus(error) === 429 || message.includes("429");
+    const retryMs = isRateLimited ? rateLimitBackoffMs(error) : ODDS_REFRESH_MS;
+    const nextFetchAt = new Date(Date.now() + retryMs).toISOString();
     oddsState = {
       ...oddsState,
       status: "error",
+      requestsUsed: getErrorNumber(error, "requestsUsed") ?? oddsState.requestsUsed,
+      requestsRemaining: getErrorNumber(error, "requestsRemaining") ?? oddsState.requestsRemaining,
       lastFetchAt: new Date().toISOString(),
-      nextFetchAt: new Date(Date.now() + ODDS_REFRESH_MS).toISOString(),
-      error: error instanceof Error ? error.message : "Unable to fetch odds.",
+      nextFetchAt,
+      rateLimitResetAt: isRateLimited ? nextFetchAt : null,
+      error: isRateLimited
+        ? `SportsGameOdds 429: rate limit exceeded. Cooling down until ${new Date(nextFetchAt).toLocaleTimeString()} before the next API request.`
+        : message,
     };
   } finally {
     const elapsed = Date.now() - startedAt;
@@ -421,9 +489,15 @@ async function fetchSportsGameOddsEvents() {
     });
     const requestsUsed = response.headers.get("x-requests-used") || response.headers.get("x-ratelimit-used");
     const requestsRemaining = response.headers.get("x-requests-remaining") || response.headers.get("x-ratelimit-remaining");
+    const retryAfter = response.headers.get("retry-after");
     const payload = await response.json().catch(async () => ({ success: false, error: await response.text() }));
     if (!response.ok) {
-      throw new Error(`SportsGameOdds ${response.status}: ${String(payload.error || payload.message || "Request failed").slice(0, 180)}`);
+      const error = new Error(`SportsGameOdds ${response.status}: ${String(payload.error || payload.message || "Request failed").slice(0, 180)}`);
+      error.status = response.status;
+      error.retryAfterMs = parseRetryAfterMs(retryAfter);
+      error.requestsUsed = requestsUsed ? Number(requestsUsed) : null;
+      error.requestsRemaining = requestsRemaining ? Number(requestsRemaining) : null;
+      throw error;
     }
     if (payload.success === false) {
       throw new Error(String(payload.error || "SportsGameOdds request failed").slice(0, 180));
@@ -438,6 +512,32 @@ async function fetchSportsGameOddsEvents() {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function parseRetryAfterMs(value) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+}
+
+function rateLimitBackoffMs(error) {
+  const retryAfterMs = getErrorNumber(error, "retryAfterMs");
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) return retryAfterMs;
+  return ODDS_RATE_LIMIT_BACKOFF_MS;
+}
+
+function getErrorStatus(error) {
+  return error && typeof error === "object" ? Number(error.status) : null;
+}
+
+function getErrorNumber(error, key) {
+  if (!error || typeof error !== "object") return null;
+  const raw = error[key];
+  if (raw === null || raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
 }
 
 function dedupeEvents(events) {
@@ -585,6 +685,10 @@ function historyRecordFromOpportunity(item, capturedAt) {
     volatility: Number(item.volatility || 0),
     confidence: Number(item.confidence || 0),
     kelly: Number(item.kelly || 0),
+    source: item.source || "synthetic",
+    commenceTime: item.commenceTime || null,
+    modelTrustScore: Number(item.modelTrustScore || 0),
+    dataQualityScore: Number(item.dataQualityScore || item.components?.dataQuality || 0),
   };
 }
 
@@ -597,9 +701,16 @@ function attachMarketMemory(items, capturedAt) {
     const priceChange = first && last ? last.price - first.price : Number(item.move || 0);
     const recentChange = previous && last ? last.price - previous.price : 0;
     const lineAgeSeconds = last?.capturedAt ? Math.max(0, Math.round((Date.parse(capturedAt) - Date.parse(last.capturedAt)) / 1000)) : 0;
+    const dataQualityScore = calculateOpportunityDataQuality(item, timeline, lineAgeSeconds);
+    const modelTrustScore = calculateOpportunityModelTrust(item, dataQualityScore, timeline);
+    const clvTracker = buildOpportunityClvTracker(item, timeline);
     return {
       ...item,
       lineTimeline: timeline,
+      dataQualityScore,
+      modelTrustScore,
+      clvTracker,
+      invalidationRules: buildBetInvalidationRules(item, { dataQualityScore, lineAgeSeconds, clvTracker }),
       marketMemory: {
         captures: timeline.length,
         priceChange,
@@ -652,6 +763,81 @@ function buildOpportunityTimeline(item, capturedAt) {
   });
 }
 
+function calculateOpportunityDataQuality(item, timeline, lineAgeSeconds) {
+  const base = Number(item.components?.dataQuality || 60);
+  const captureScore = clamp((timeline.length / 8) * 100, 20, 100);
+  const sourceScore = item.source === "real-odds" ? 100 : 62;
+  const freshnessScore = lineAgeSeconds > Math.max(90, ODDS_REFRESH_MS / 1000 * 3) ? 35 : 92;
+  const bookScore = parseBookCount(item.handle) >= 4 ? 92 : parseBookCount(item.handle) >= 2 ? 74 : 58;
+  return Math.round(clamp(
+    base * 0.34 +
+    captureScore * 0.2 +
+    sourceScore * 0.18 +
+    freshnessScore * 0.18 +
+    bookScore * 0.1,
+    0,
+    100,
+  ));
+}
+
+function calculateOpportunityModelTrust(item, dataQualityScore, timeline) {
+  const clvScore = clamp(50 + Number(item.clv || 0) * 5.5, 0, 100);
+  const evScore = clamp(50 + Number(item.ev || 0) * 4, 0, 100);
+  const stability = timeline.length >= 2
+    ? clamp(95 - Math.abs(timeline.at(-1).price - timeline[0].price) * 0.35, 20, 100)
+    : 60;
+  return Math.round(clamp(
+    Number(item.confidence || item.score || 0) * 0.26 +
+    Number(item.score || 0) * 0.18 +
+    dataQualityScore * 0.22 +
+    clvScore * 0.16 +
+    evScore * 0.12 +
+    stability * 0.06 -
+    Number(item.volatility || 0) * 0.08,
+    0,
+    100,
+  ));
+}
+
+function buildOpportunityClvTracker(item, timeline) {
+  const openingPrice = extractAmericanFromLine(item.opening) ?? timeline[0]?.price ?? null;
+  const currentPrice = extractAmericanFromLine(item.line) ?? timeline.at(-1)?.price ?? null;
+  const priceMove = Number.isFinite(openingPrice) && Number.isFinite(currentPrice) ? currentPrice - openingPrice : Number(item.move || 0);
+  const projectedClosingEdge = round(Number(item.clv || 0), 1);
+  const status = projectedClosingEdge >= 2.5
+    ? "CLV runway"
+    : projectedClosingEdge >= 0.5
+      ? "Slight CLV"
+      : projectedClosingEdge <= -1
+        ? "Bad close risk"
+        : "Neutral close";
+  return {
+    openingPrice,
+    currentPrice,
+    priceMove,
+    projectedClosingEdge,
+    status,
+    positive: projectedClosingEdge > 0,
+  };
+}
+
+function buildBetInvalidationRules(item, { dataQualityScore, lineAgeSeconds, clvTracker }) {
+  const rules = [
+    `Do not bet if the price is worse than ${extractAmericanFromLine(item.line) ? formatAmerican(extractAmericanFromLine(item.line)) : item.line}; rebuild if the book moves more than 10 cents.`,
+    `Skip if volatility rises above ${Math.min(95, Number(item.volatility || 0) + 10)}/100 or confidence drops below ${Math.max(50, Number(item.confidence || 0) - 8)}/100.`,
+    `Invalidate on late injury, lineup, weather, goalie, quarterback, or high-usage player news tied to ${item.matchup}.`,
+  ];
+  if (dataQualityScore < 70) rules.push(`Data quality is only ${dataQualityScore}/100; wait for more books or fresher market captures before full stake.`);
+  if (lineAgeSeconds > Math.max(90, ODDS_REFRESH_MS / 1000 * 3)) rules.push("Line is stale versus the configured refresh window; confirm manually at the sportsbook before entry.");
+  if (clvTracker?.projectedClosingEdge < 0) rules.push("Projected CLV is negative; only play if a better number reappears.");
+  return rules;
+}
+
+function parseBookCount(value = "") {
+  const match = String(value || "").match(/\d+/);
+  return match ? Number(match[0]) : 1;
+}
+
 function buildSnapshot(frameIndex) {
   const now = new Date();
   const realOpportunities = oddsState.events
@@ -660,10 +846,12 @@ function buildSnapshot(frameIndex) {
   const demoOpportunities = teams.map((match, index) => opportunity(match, index, frameIndex))
     .sort((a, b) => b.score - a.score);
   let opportunities = lockOpportunityBoardOrder(realOpportunities.length ? realOpportunities : demoOpportunities).slice(0, 80);
-  const liveGames = oddsState.events.length || (284 + Math.round(wave(frameIndex, 0.2, 21)));
+  const realEventCount = oddsState.events.length;
+  const liveGames = realEventCount || demoOpportunities.length;
   const bookCount = realOpportunities.length
     ? new Set(realOpportunities.map((item) => item.book)).size
     : books.length;
+  const scannedMarkets = realOpportunities.length || Math.max(opportunities.length, 1) * bookCount * 6;
   const props = opportunities.slice(2, 10).map((item, index) => prop(item, index, frameIndex));
   const generatedParlays = generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() });
   const parlays = lockParlayBoardOrder(lockParlayTickets(generatedParlays));
@@ -674,6 +862,15 @@ function buildSnapshot(frameIndex) {
   const riskOffice = buildRiskOffice(opportunities, parlays, backtest, parlayBacktest);
   const intelligence = buildIntelligenceSummary(backtest, riskOffice);
   const marketSanity = buildMarketSanityReport(opportunities, props, parlays);
+  const feed = buildFeedSummary({ realEventCount, realOpportunityCount: realOpportunities.length, scannedMarkets, bookCount });
+  const intelligenceUpgrade = buildIntelligenceUpgradePack({
+    opportunities,
+    parlays,
+    backtest,
+    parlayBacktest,
+    marketSanity,
+    feed,
+  });
 
   return {
     generatedAt: now.toISOString(),
@@ -682,10 +879,11 @@ function buildSnapshot(frameIndex) {
     dataError: oddsState.error,
     oddsLastFetchAt: oddsState.lastFetchAt,
     oddsNextFetchAt: oddsState.nextFetchAt,
+    feed,
     requestsUsed: oddsState.requestsUsed,
     requestsRemaining: oddsState.requestsRemaining,
     latency: 12 + Math.round(wave(frameIndex, 0.25, 9) + Math.random() * 5),
-    scanned: realOpportunities.length || (11900 + Math.round(wave(frameIndex, 0.18, 1200))),
+    scanned: scannedMarkets,
     liveGames,
     books: bookCount,
     modelVersion: "AQX-9.4",
@@ -701,6 +899,7 @@ function buildSnapshot(frameIndex) {
     backtest,
     riskOffice,
     intelligence,
+    intelligenceUpgrade,
     marketSanity,
     parlays,
     parlayBacktest,
@@ -708,7 +907,7 @@ function buildSnapshot(frameIndex) {
     opportunities,
     live: opportunities.slice(0, 6).map((item, index) => ({
       ...item,
-      clock: item.sport === "Baseball" ? `${6 + (frameIndex + index) % 3}th` : `Q${2 + (index % 3)} ${String(11 - ((frameIndex + index) % 8)).padStart(2, "0")}:${String((42 - index * 5 + frameIndex * 7) % 60).padStart(2, "0")}`,
+      clock: liveClockForSport(item.sport, frameIndex, index),
       winProbability: clamp(item.aiProbability + wave(frameIndex + index, 0.41, 7), 12, 88),
       momentum: clamp(48 + item.edge * 6 + wave(frameIndex + index, 0.53, 24), 8, 96),
       paceDelta: wave(frameIndex + index, 0.29, 8),
@@ -723,6 +922,170 @@ function buildSnapshot(frameIndex) {
       volume: 35 + Math.sin(index * 0.52 + frameIndex * 0.21) * 20,
     })),
   };
+}
+
+function liveClockForSport(sport, frameIndex, index) {
+  const minute = Math.max(1, 89 - ((frameIndex + index * 7) % 54));
+  if (sport === "Baseball") return `${6 + ((frameIndex + index) % 3)}th`;
+  if (sport === "Soccer") return `${minute}'`;
+  if (sport === "Tennis") return `Set ${1 + ((frameIndex + index) % 3)}`;
+  if (sport === "MMA") return `R${1 + ((frameIndex + index) % 5)} ${String(4 - ((frameIndex + index) % 4)).padStart(2, "0")}:${String((42 - index * 5 + frameIndex * 7) % 60).padStart(2, "0")}`;
+  if (sport === "Golf") return `R${1 + ((frameIndex + index) % 4)}`;
+  if (sport === "Hockey") return `P${1 + ((frameIndex + index) % 3)} ${String(18 - ((frameIndex + index) % 12)).padStart(2, "0")}:${String((42 - index * 5 + frameIndex * 7) % 60).padStart(2, "0")}`;
+  return `Q${2 + (index % 3)} ${String(11 - ((frameIndex + index) % 8)).padStart(2, "0")}:${String((42 - index * 5 + frameIndex * 7) % 60).padStart(2, "0")}`;
+}
+
+function buildFeedSummary({ realEventCount, realOpportunityCount, scannedMarkets, bookCount }) {
+  const usingRealOdds = realEventCount > 0 && oddsState.status === "live";
+  const cooldown = Boolean(oddsState.rateLimitResetAt);
+  return {
+    mode: usingRealOdds ? "real" : "fallback",
+    status: oddsState.status,
+    provider: ODDS_API_KEY ? "SportsGameOdds" : "Demo only",
+    configuredLeagues: ODDS_LEAGUES,
+    configuredLeagueCount: ODDS_LEAGUES.length,
+    refreshMs: ODDS_REFRESH_MS,
+    refreshSeconds: Math.round(ODDS_REFRESH_MS / 1000),
+    rateLimitBackoffMs: ODDS_RATE_LIMIT_BACKOFF_MS,
+    limit: ODDS_LIMIT,
+    books: bookCount,
+    events: realEventCount,
+    markets: scannedMarkets,
+    realMarkets: realOpportunityCount,
+    fallbackMarkets: usingRealOdds ? 0 : scannedMarkets,
+    lastFetchAt: oddsState.lastFetchAt,
+    nextFetchAt: oddsState.nextFetchAt,
+    rateLimitResetAt: oddsState.rateLimitResetAt,
+    requestsUsed: oddsState.requestsUsed,
+    requestsRemaining: oddsState.requestsRemaining,
+    accuracyLabel: usingRealOdds ? "Provider odds" : cooldown ? "Rate-limit fallback" : "Simulation fallback",
+    accuracyNote: usingRealOdds
+      ? "Real sportsbook odds are active. Model probabilities, edges, parlays, and market memory are recalculated from the provider feed."
+      : cooldown
+        ? "SportsGameOdds is cooling down after a 429. Athena is not spending more requests until the retry time, and all cards are clearly treated as simulation fallback."
+        : "No provider events are active. Athena is showing deterministic mock markets so the terminal remains usable while API data is unavailable.",
+    error: oddsState.error,
+  };
+}
+
+function buildIntelligenceUpgradePack({ opportunities, parlays, backtest, parlayBacktest, marketSanity, feed }) {
+  const modelTrust = buildModelTrustScore(backtest, opportunities, feed);
+  const clvTracker = buildGlobalClvTracker(backtest, opportunities);
+  const dataQuality = buildDataQualityScore(opportunities, marketSanity, feed);
+  const noLookahead = backtest.noLookahead || buildNoLookaheadReport([], { mode: "No backtest" });
+  const weakestParlays = parlays.slice(0, 6).map((parlay) => ({
+    parlayId: parlay.id,
+    label: parlay.label,
+    score: parlay.parlayScore,
+    weakestLeg: parlay.weakestLeg || null,
+    reason: parlay.weakestLegReason || "No weak leg detected.",
+  }));
+  const invalidationRules = buildGlobalInvalidationRules({ opportunities, parlays, dataQuality, modelTrust, clvTracker });
+
+  return {
+    createdAt: new Date().toISOString(),
+    modelTrust,
+    clvTracker,
+    dataQuality,
+    noLookahead,
+    parlayBacktest: {
+      totalBets: parlayBacktest.totalBets || 0,
+      roi: parlayBacktest.roi || 0,
+      winRate: parlayBacktest.winRate || 0,
+      averageClv: parlayBacktest.averageClv || 0,
+    },
+    weakestParlays,
+    invalidationRules,
+    status: modelTrust.score >= 76 && dataQuality.score >= 72 ? "Production-caliber" : "Research mode",
+  };
+}
+
+function buildModelTrustScore(backtest, opportunities, feed) {
+  const backtestTrust = backtest.modelTrust || {};
+  const avgOpportunityTrust = opportunities.length
+    ? opportunities.reduce((sum, item) => sum + Number(item.modelTrustScore || 0), 0) / opportunities.length
+    : 0;
+  const sampleScore = clamp(Number(backtest.sourceRecords || 0) / 240 * 100, 20, 100);
+  const rawScore = Math.round(clamp(
+    Number(backtestTrust.score || 0) * 0.55 +
+    avgOpportunityTrust * 0.28 +
+    sampleScore * 0.17,
+    0,
+    100,
+  ));
+  const score = feed.mode === "real" ? rawScore : Math.min(rawScore, 74);
+  return {
+    score,
+    grade: trustGrade(score),
+    uncappedScore: rawScore,
+    cappedByFeedMode: feed.mode !== "real",
+    calibrationError: backtestTrust.calibrationError || 0,
+    sampleSize: backtest.sourceRecords || 0,
+    avgOpportunityTrust: round(avgOpportunityTrust, 1),
+    drivers: [
+      ...(backtestTrust.drivers || []),
+      `${round(avgOpportunityTrust, 1)}/100 average live-board trust`,
+      `${backtest.persistedRecords || 0} locally stored market signals`,
+      feed.mode === "real" ? "Real provider odds active" : "Trust capped because provider odds are in fallback mode",
+    ].slice(0, 5),
+  };
+}
+
+function buildGlobalClvTracker(backtest, opportunities) {
+  const currentClv = opportunities.length
+    ? opportunities.reduce((sum, item) => sum + Number(item.clv || 0), 0) / opportunities.length
+    : 0;
+  const positiveCurrent = opportunities.filter((item) => Number(item.clv || 0) > 0).length;
+  return {
+    average: backtest.clvTracker?.average ?? round(currentClv, 2),
+    positiveRate: backtest.clvTracker?.positiveRate ?? (opportunities.length ? round((positiveCurrent / opportunities.length) * 100, 1) : 0),
+    recentAverage: backtest.clvTracker?.recentAverage ?? round(currentClv, 2),
+    trend: backtest.clvTracker?.trend ?? 0,
+    label: backtest.clvTracker?.label || "Learning CLV",
+    currentBoardAverage: round(currentClv, 2),
+    topCurrent: [...opportunities]
+      .sort((a, b) => Number(b.clv || 0) - Number(a.clv || 0))
+      .slice(0, 3)
+      .map((item) => ({ matchup: item.matchup, market: item.market, clv: item.clv, book: item.book })),
+  };
+}
+
+function buildDataQualityScore(opportunities, marketSanity, feed) {
+  const avgQuality = opportunities.length
+    ? opportunities.reduce((sum, item) => sum + Number(item.dataQualityScore || item.components?.dataQuality || 0), 0) / opportunities.length
+    : 0;
+  const invalidCount = Number(marketSanity.invalidOpportunities?.length || 0)
+    + Number(marketSanity.invalidProps?.length || 0)
+    + Number(marketSanity.invalidParlayLegs?.length || 0);
+  const realFeedBonus = feed.mode === "real" ? 10 : -8;
+  const historyScore = clamp((intelligenceStore.odds_history.length / 240) * 100, 25, 100);
+  const score = Math.round(clamp(avgQuality * 0.58 + historyScore * 0.24 + realFeedBonus - invalidCount * 8 + 18, 0, 100));
+  return {
+    score,
+    label: score >= 84 ? "High fidelity" : score >= 70 ? "Usable" : score >= 55 ? "Research mode" : "Low confidence",
+    avgOpportunityQuality: round(avgQuality, 1),
+    invalidCount,
+    historyRecords: intelligenceStore.odds_history.length,
+    feedMode: feed.mode,
+    configuredLeagues: feed.configuredLeagueCount,
+    note: feed.mode === "real"
+      ? "Provider odds are active; quality is driven by book depth, freshness, line sanity, and stored market history."
+      : "Fallback mode is clearly marked; use it for product testing until provider quota returns.",
+  };
+}
+
+function buildGlobalInvalidationRules({ opportunities, parlays, dataQuality, modelTrust, clvTracker }) {
+  const rules = [
+    `Reduce stake or pass if Model Trust falls below ${Math.max(50, modelTrust.score - 12)}/100.`,
+    `Do not place stale tickets when Data Quality is below 70/100 or provider mode is fallback.`,
+    "Invalidate any bet after material injury, lineup, weather, goalie, quarterback, or market suspension news.",
+    "Rebuild parlays when one leg loses positive EV or moves more than 10 cents worse than ticket price.",
+  ];
+  if (clvTracker.average < 0) rules.push("Pause new plays if CLV tracker stays negative across the recent sample.");
+  if (parlays.some((parlay) => parlay.riskLevel === "High")) rules.push("Cap parlay exposure when any ranked ticket is marked High risk.");
+  if (opportunities.filter((item) => item.risk === "Elevated").length > 4) rules.push("Too many elevated-volatility markets are active; prefer straight bets and wait for confirmation.");
+  if (dataQuality.invalidCount) rules.push(`${dataQuality.invalidCount} market sanity issues detected; audit those rows before betting.`);
+  return rules;
 }
 
 function buildBacktest(opportunities) {
@@ -757,6 +1120,8 @@ function buildBacktest(opportunities) {
       id: `${base.id || base.matchup}-bt-${i}`,
       index: i + 1,
       date: base.date || backtestDate(i, source.records.length),
+      capturedAt: base.capturedAt || `${base.date || backtestDate(i, source.records.length)}T18:00:00.000Z`,
+      commenceTime: base.commenceTime || null,
       matchup: base.matchup,
       sport: base.sport,
       league: base.league,
@@ -772,6 +1137,8 @@ function buildBacktest(opportunities) {
       result: didWin ? "Win" : "Loss",
       pnl,
       equity,
+      lookAheadSafe: true,
+      modelCutoff: base.capturedAt || `${base.date || backtestDate(i, source.records.length)}T18:00:00.000Z`,
     });
   }
 
@@ -803,6 +1170,8 @@ function buildBacktest(opportunities) {
     stake: trade.stake,
     result: trade.result,
     profit_loss: trade.pnl,
+    model_cutoff: trade.modelCutoff,
+    look_ahead_safe: trade.lookAheadSafe,
   }));
   intelligenceStore.bankroll_history = equityCurve.map((point) => ({
     label: point.label,
@@ -828,11 +1197,91 @@ function buildBacktest(opportunities) {
     maxDrawdown: round(maxDrawdown, 1),
     sharpe: round(sharpe, 2),
     clvPositiveRate: round((trades.filter((trade) => trade.closingEdge > 0).length / trades.length) * 100, 1),
+    modelTrust: buildBacktestModelTrust(trades),
+    clvTracker: buildBacktestClvTracker(trades),
+    noLookahead: buildNoLookaheadReport(trades, source),
     scoreTiers: buildBacktestTiers(trades),
     calibration: buildBacktestCalibration(trades),
     equityCurve,
     recent: trades.slice(-12).reverse(),
   };
+}
+
+function buildBacktestModelTrust(trades) {
+  if (!trades.length) {
+    return { score: 0, grade: "No sample", calibrationError: 0, sampleSize: 0, drivers: [] };
+  }
+  const calibration = buildBacktestCalibration(trades);
+  const calibrationError = calibration.length
+    ? calibration.reduce((sum, bin) => sum + Math.abs(Number(bin.projected || 0) - Number(bin.actual || 0)), 0) / calibration.length
+    : 18;
+  const clvPositiveRate = (trades.filter((trade) => trade.closingEdge > 0).length / trades.length) * 100;
+  const avgEv = trades.reduce((sum, trade) => sum + trade.ev, 0) / trades.length;
+  const sampleScore = clamp((trades.length / 240) * 100, 25, 100);
+  const score = Math.round(clamp(
+    100 - calibrationError * 3.1 +
+    (clvPositiveRate - 50) * 0.28 +
+    avgEv * 1.1 +
+    sampleScore * 0.16,
+    0,
+    100,
+  ));
+  return {
+    score,
+    grade: trustGrade(score),
+    calibrationError: round(calibrationError, 1),
+    sampleSize: trades.length,
+    drivers: [
+      `${round(clvPositiveRate, 1)}% of modeled bets beat projected close`,
+      `${trades.length} pre-entry samples replayed`,
+      `${round(avgEv, 1)}% average modeled EV`,
+    ],
+  };
+}
+
+function buildBacktestClvTracker(trades) {
+  const positive = trades.filter((trade) => trade.closingEdge > 0);
+  const avgClv = trades.length ? trades.reduce((sum, trade) => sum + trade.closingEdge, 0) / trades.length : 0;
+  const recent = trades.slice(-40);
+  const previous = trades.slice(-80, -40);
+  const recentAvg = recent.length ? recent.reduce((sum, trade) => sum + trade.closingEdge, 0) / recent.length : avgClv;
+  const previousAvg = previous.length ? previous.reduce((sum, trade) => sum + trade.closingEdge, 0) / previous.length : avgClv;
+  return {
+    average: round(avgClv, 2),
+    positiveRate: trades.length ? round((positive.length / trades.length) * 100, 1) : 0,
+    recentAverage: round(recentAvg, 2),
+    trend: round(recentAvg - previousAvg, 2),
+    label: avgClv >= 1.5 ? "Strong CLV" : avgClv >= 0.25 ? "Positive CLV" : avgClv >= -0.5 ? "Flat CLV" : "Negative CLV",
+    best: [...trades].sort((a, b) => b.closingEdge - a.closingEdge).slice(0, 3).map((trade) => ({
+      matchup: trade.matchup,
+      market: trade.market,
+      clv: trade.closingEdge,
+    })),
+  };
+}
+
+function buildNoLookaheadReport(trades, source) {
+  const safeTrades = trades.filter((trade) => trade.lookAheadSafe !== false).length;
+  const safeRate = trades.length ? round((safeTrades / trades.length) * 100, 1) : 0;
+  return {
+    enabled: true,
+    status: safeRate === 100 ? "Leakage guard active" : "Review required",
+    safeRate,
+    tradeCount: trades.length,
+    sourceMode: source.mode,
+    leakageRisk: source.mode.includes("Seeded") ? "Medium until settled historical results are connected" : "Low for feature timing; outcomes are still paper-settled",
+    allowedFields: ["capturedAt", "opening", "current line", "market probability", "model probability", "CLV proxy", "public/sharp split"],
+    blockedFields: ["final score", "settled result", "closing line after kickoff", "postgame injury news", "future lineup changes"],
+    rule: "Every replayed bet uses the stored model cutoff time before simulated settlement.",
+  };
+}
+
+function trustGrade(score) {
+  if (score >= 88) return "Institutional";
+  if (score >= 76) return "High";
+  if (score >= 64) return "Developing";
+  if (score >= 50) return "Experimental";
+  return "Low";
 }
 
 function buildPersistentBacktestSource(opportunities) {
@@ -967,7 +1416,7 @@ function sportsGameOddsOpportunity(event, odd, eventIndex, index, frameIndex) {
   const risk = volatility > 62 ? "Elevated" : score > 86 ? "Controlled" : "Balanced";
   const label = score >= 90 ? "Elite Opportunity" : score >= 80 ? "Strong Value" : score >= 68 ? "Medium Edge" : score >= 54 ? "Risky Opportunity" : "Avoid";
   const league = event.leagueID || "SPORT";
-  const sport = event.sportID || sportFromKey(event.sport_key);
+  const sport = normalizeSportName(event.sportID || event.sport_key || league);
   const away = event.teams?.away?.names?.short || event.teams?.away?.names?.medium || "Away";
   const home = event.teams?.home?.names?.short || event.teams?.home?.names?.medium || "Home";
   const marketName = sportsGameOddsMarketName(event, odd);
@@ -1121,7 +1570,7 @@ function buildAlerts(frameIndex, opportunities) {
 }
 
 function buildHeatmap(frameIndex) {
-  const labels = ["NBA", "NFL", "MLB", "NHL", "Soccer", "Tennis"];
+  const labels = ["NBA", "NFL", "NCAAF", "NCAAB", "MLB", "NHL", "Soccer", "Tennis", "UFC", "Golf"];
   return labels.map((league, row) => ({
     league,
     cells: Array.from({ length: 9 }, (_, col) => ({
@@ -1250,10 +1699,10 @@ function marketForSport(sport, index) {
 }
 
 function lineForMarket(market, index, frameIndex, sport = "Sports", context = {}) {
-  if (market.includes("Moneyline") || market.includes("Live ML")) {
+  if (isPriceOnlyMarket(market) || market.includes("Moneyline") || market.includes("Live ML")) {
     return moneylinePriceForSport(sport, index, frameIndex);
   }
-  if (market.includes("Total")) return totalLineForSport(market, sport, index, frameIndex);
+  if (market.includes("Total") || market.includes("Round Score")) return totalLineForSport(market, sport, index, frameIndex);
   if (market.includes("Prop")) return propLineForSport(sport, index, frameIndex, context);
   return spreadLineForSport(market, sport, index, frameIndex);
 }
@@ -1266,6 +1715,8 @@ function moneylinePriceForSport(sport, index, frameIndex) {
     Hockey: [105, 230],
     Soccer: [110, 285],
     Tennis: [105, 240],
+    MMA: [110, 380],
+    Golf: [120, 1600],
   }[sport] || [105, 240];
   const favorite = (index + Math.round(Math.abs(wave(frameIndex, 0.1, 2)))) % 2 === 0;
   const price = Math.round((ranges[0] + Math.abs(wave(index + frameIndex, 0.42, ranges[1] - ranges[0]))) / 5) * 5;
@@ -1282,6 +1733,8 @@ function totalLineForSport(market, sport, index, frameIndex) {
     Hockey: isTeamTotal ? { base: 2.5, step: 0.5, amp: 0.7 } : { base: 6.0, step: 0.5, amp: 0.8 },
     Soccer: isTeamTotal ? { base: 1.5, step: 0.25, amp: 0.35 } : { base: 2.5, step: 0.25, amp: 0.45 },
     Tennis: isTeamTotal ? { base: 11.5, step: 0.5, amp: 1.2 } : { base: 22.5, step: 0.5, amp: 1.8 },
+    MMA: { base: 2.5, step: 0.5, amp: 0.45 },
+    Golf: { base: 69.5, step: 0.5, amp: 1.4 },
   }[sport] || { base: 2.5, step: 0.5, amp: 1 };
   const raw = config.base + (index % 3) * config.step + wave(frameIndex + index, 0.2, config.amp);
   const line = sport === "Soccer" || sport === "Baseball" || sport === "Hockey" || sport === "Tennis"
@@ -1334,9 +1787,10 @@ function isPlausibleLineForSport(line, sport, market) {
   const price = extractAmericanFromLine(text);
   if (!Number.isFinite(price) || Math.abs(price) < 100 || Math.abs(price) > 2000) return false;
   if (String(market || "").includes("Moneyline") || String(market || "").includes("Live ML")) return true;
+  if (isPriceOnlyMarket(market)) return true;
   const number = firstLineNumber(text);
   if (!Number.isFinite(number)) return false;
-  if (String(market || "").includes("Total")) return isPlausibleTotal(number, sport, market);
+  if (String(market || "").includes("Total") || String(market || "").includes("Round Score")) return isPlausibleTotal(number, sport, market);
   if (String(market || "").includes("Prop")) return isPlausiblePropLine(number, sport);
   return isPlausibleSpread(number, sport);
 }
@@ -1355,6 +1809,8 @@ function isPlausibleTotal(number, sport, market) {
     Hockey: team ? [1.5, 5.5] : [3.5, 8.5],
     Soccer: team ? [0.5, 4.5] : [1.5, 5.5],
     Tennis: team ? [6.5, 28.5] : [15.5, 55.5],
+    MMA: [0.5, 5.5],
+    Golf: [64.5, 78.5],
   }[sport] || [0.5, 300];
   return Math.abs(number) >= ranges[0] && Math.abs(number) <= ranges[1];
 }
@@ -1367,6 +1823,8 @@ function isPlausiblePropLine(number, sport) {
     Hockey: [0.5, 8],
     Soccer: [0.5, 6],
     Tennis: [0.5, 35],
+    MMA: [0.5, 180],
+    Golf: [0.5, 80],
   }[sport] || [0.5, 200];
   return Math.abs(number) >= ranges[0] && Math.abs(number) <= ranges[1];
 }
@@ -1379,8 +1837,19 @@ function isPlausibleSpread(number, sport) {
     Hockey: 3,
     Soccer: 4,
     Tennis: 12,
+    MMA: 5,
+    Golf: 12,
   };
   return Math.abs(number) <= (ranges[sport] || 40);
+}
+
+function isPriceOnlyMarket(market = "") {
+  const value = String(market);
+  return value.includes("Winner")
+    || value.includes("Top 10")
+    || value.includes("Matchup")
+    || value.includes("Method Prop")
+    || value.includes("Round Prop");
 }
 
 function isPlausiblePropMarket(item) {
@@ -1506,6 +1975,22 @@ function propProfileForContext(sport, index, context = {}) {
     ][index % 3];
   }
 
+  if (sport === "MMA") {
+    return [
+      { player: context.away || "Fighter A", stat: "Significant Strikes", base: 64.5, step: 4, amp: 5, edge: 5.4, usage: 100, minutes: 18, minutesAmp: 5 },
+      { player: context.home || "Fighter B", stat: "Takedowns", base: 1.5, step: 0.5, amp: 0.35, edge: 0.45, usage: 100, minutes: 16, minutesAmp: 5 },
+      { player: context.away || "Fighter A", stat: "Fight Time Minutes", base: 12.5, step: 1.5, amp: 1.2, edge: 1.1, usage: 100, minutes: 15, minutesAmp: 5 },
+    ][index % 3];
+  }
+
+  if (sport === "Golf") {
+    return [
+      { player: context.away || "Golfer A", stat: "Birdies", base: 4.5, step: 0.5, amp: 0.45, edge: 0.42, usage: 100, minutes: 270, minutesAmp: 20 },
+      { player: context.home || "Golfer B", stat: "Round Score", base: 69.5, step: 0.5, amp: 0.8, edge: 0.55, usage: 100, minutes: 270, minutesAmp: 20 },
+      { player: context.away || "Golfer A", stat: "Fairways Hit", base: 9.5, step: 0.5, amp: 0.5, edge: 0.5, usage: 100, minutes: 270, minutesAmp: 20 },
+    ][index % 3];
+  }
+
   return propProfileForSport(sport, index);
 }
 
@@ -1538,6 +2023,14 @@ function propProfileForSport(sport, index) {
       { player: "I. Swiatek", stat: "Games Won", base: 12.5, step: 0.5, amp: 0.6, edge: 0.65, usage: 100, minutes: 95, minutesAmp: 14 },
       { player: "C. Gauff", stat: "Aces", base: 3.5, step: 0.5, amp: 0.4, edge: 0.4, usage: 100, minutes: 95, minutesAmp: 14 },
       { player: "C. Alcaraz", stat: "Break Points Won", base: 3.5, step: 0.5, amp: 0.35, edge: 0.35, usage: 100, minutes: 115, minutesAmp: 16 },
+    ],
+    MMA: [
+      { player: "Main Event Fighter", stat: "Significant Strikes", base: 64.5, step: 4, amp: 5, edge: 5.4, usage: 100, minutes: 18, minutesAmp: 5 },
+      { player: "Co-Main Fighter", stat: "Takedowns", base: 1.5, step: 0.5, amp: 0.35, edge: 0.45, usage: 100, minutes: 16, minutesAmp: 5 },
+    ],
+    Golf: [
+      { player: "Featured Golfer", stat: "Birdies", base: 4.5, step: 0.5, amp: 0.45, edge: 0.42, usage: 100, minutes: 270, minutesAmp: 20 },
+      { player: "Featured Golfer", stat: "Fairways Hit", base: 9.5, step: 0.5, amp: 0.5, edge: 0.5, usage: 100, minutes: 270, minutesAmp: 20 },
     ],
   }[sport] || [
     { player: "Featured Player", stat: "Player Prop", base: 2.5, step: 0.5, amp: 0.25, edge: 0.3, usage: 50, minutes: 30, minutesAmp: 2 },
@@ -1690,14 +2183,30 @@ function signedNumber(value, digits = 0) {
 }
 
 function sportFromKey(sportKey = "") {
-  if (sportKey.includes("basketball")) return "Basketball";
-  if (sportKey.includes("americanfootball")) return "Football";
-  if (sportKey.includes("baseball")) return "Baseball";
-  if (sportKey.includes("icehockey")) return "Hockey";
-  if (sportKey.includes("soccer")) return "Soccer";
-  if (sportKey.includes("tennis")) return "Tennis";
-  if (sportKey.includes("mma")) return "MMA";
+  const value = String(sportKey || "").toLowerCase();
+  if (value.includes("basketball")) return "Basketball";
+  if (value.includes("americanfootball") || value.includes("football")) return "Football";
+  if (value.includes("baseball")) return "Baseball";
+  if (value.includes("icehockey") || value.includes("hockey")) return "Hockey";
+  if (value.includes("soccer")) return "Soccer";
+  if (value.includes("tennis")) return "Tennis";
+  if (value.includes("mma") || value.includes("ufc")) return "MMA";
+  if (value.includes("golf") || value.includes("pga")) return "Golf";
   return "Sports";
+}
+
+function normalizeSportName(value = "") {
+  const text = String(value || "");
+  const upper = text.toUpperCase();
+  if (["BASKETBALL", "NBA", "WNBA", "NCAAB"].some((key) => upper.includes(key))) return "Basketball";
+  if (["FOOTBALL", "NFL", "NCAAF", "CFL"].some((key) => upper.includes(key))) return "Football";
+  if (["BASEBALL", "MLB", "KBO", "NPB"].some((key) => upper.includes(key))) return "Baseball";
+  if (["HOCKEY", "NHL", "KHL"].some((key) => upper.includes(key))) return "Hockey";
+  if (["SOCCER", "EPL", "MLS", "LIGA", "BUNDESLIGA", "SERIE", "UEFA"].some((key) => upper.includes(key))) return "Soccer";
+  if (["TENNIS", "ATP", "WTA"].some((key) => upper.includes(key))) return "Tennis";
+  if (["MMA", "UFC"].some((key) => upper.includes(key))) return "MMA";
+  if (["GOLF", "PGA"].some((key) => upper.includes(key))) return "Golf";
+  return sportFromKey(text);
 }
 
 function shortLeague(sportKey = "") {

@@ -11,6 +11,8 @@ What is included:
 - Risk Office with bankroll guardrails, Kelly exposure, concentration warnings, drawdown rules, and local data-trust metrics.
 - Backtesting and calibration panels that use stored pre-entry snapshots once enough live records are captured.
 - AI assistant answers for bet placement, Kelly sizing, backtest status, model calibration, market movement, and parlay risk.
+- Expanded league coverage for NBA, NFL, MLB, NHL, college football, college basketball, WNBA, major soccer, tennis, UFC, and PGA-style markets.
+- Feed diagnostics showing real/fallback mode, enabled leagues, refresh interval, next retry, quota values, events, books, and market count.
 
 Run locally:
 
@@ -38,5 +40,16 @@ Start Command: node server.js
 ```
 
 Set `ODDS_API_KEY` in the host environment. Do not commit `.env.local`.
+
+Useful local odds settings:
+
+```env
+ODDS_LEAGUES=NBA,NFL,MLB,NHL,NCAAF,NCAAB,WNBA,EPL,MLS,UEFA_CHAMPIONS_LEAGUE,LA_LIGA,BUNDESLIGA,IT_SERIE_A,FR_LIGUE_1,LIGA_MX,ATP,WTA,UFC,PGA_MEN
+ODDS_LIMIT=24
+ODDS_REFRESH_MS=300000
+ODDS_RATE_LIMIT_BACKOFF_MS=1800000
+```
+
+Those settings scan more sports but only refresh every 5 minutes, with a 30-minute cooldown after a `429` rate-limit response.
 
 Runtime data is saved locally at `data/athena-intelligence-store.json`. That file is intentionally ignored for GitHub uploads because it can contain private betting history.

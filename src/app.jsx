@@ -354,6 +354,8 @@ function CommandCenterWorkspace({ snapshot, selected, setSelectedId, messages, q
 
       <aside className="min-w-0 space-y-3">
         <IntelligenceBrainPanel snapshot={snapshot} selected={selected} compact />
+        <DataFeedPanel snapshot={snapshot} />
+        <IntelligenceUpgradePanel snapshot={snapshot} compact />
         <MarketDetection snapshot={snapshot} />
         <AISynthesis opportunity={selected} snapshot={snapshot} />
         <Assistant
@@ -402,6 +404,7 @@ function IntelligenceBrainWorkspace({ snapshot, selected, setSelectedId }) {
           </div>
         </Panel>
       </div>
+      <IntelligenceUpgradePanel snapshot={snapshot} />
       <div className="grid gap-3 xl:grid-cols-3">
         <BrainChecklist title="Next Best Actions" items={brain.nextActions} icon={Sparkles} />
         <BrainChecklist title="Risk Blocks" items={brain.riskBlocks} icon={ShieldCheck} />
@@ -440,6 +443,66 @@ function IntelligenceBrainPanel({ snapshot, selected, compact = false }) {
             ))}
           </div>
         ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+function IntelligenceUpgradePanel({ snapshot, compact = false }) {
+  const pack = snapshot.intelligenceUpgrade || {};
+  const trust = pack.modelTrust || {};
+  const clv = pack.clvTracker || {};
+  const quality = pack.dataQuality || {};
+  const noLookahead = pack.noLookahead || {};
+  const weakest = pack.weakestParlays?.[0];
+  const metrics = [
+    ["Model Trust", `${trust.score || 0}/100`, trust.grade || "Learning", BrainCircuit, "text-mint"],
+    ["CLV Tracker", signed(clv.average || 0), `${clv.positiveRate || 0}% CLV+`, LineChart, "text-amber-200"],
+    ["Data Quality", `${quality.score || 0}/100`, quality.label || "Checking", Radar, "text-cyan-200"],
+    ["No-Lookahead", `${noLookahead.safeRate || 0}%`, noLookahead.status || "Guard active", ShieldCheck, "text-mint"],
+  ];
+
+  return (
+    <Panel icon={BrainCircuit} title="Intelligence Upgrade Pack" action={<span className="status-pill mono text-[10px]">{pack.status || "Research mode"}</span>}>
+      <div className="grid gap-3 p-3">
+        <div className={`grid gap-2 ${compact ? "grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-4"}`}>
+          {metrics.map(([label, value, sub, Icon, tone]) => (
+            <div key={label} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
+                <Icon size={14} className={tone} />
+              </div>
+              <div className={`mono mt-2 text-xl font-black ${tone}`}>{value}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {!compact ? (
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/[0.045] p-3">
+              <div className="text-[10px] uppercase tracking-[0.16em] text-cyan-200">Trust Drivers</div>
+              <div className="mt-2 grid gap-2">
+                {(trust.drivers || []).slice(0, 4).map((driver) => (
+                  <div key={driver} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">{driver}</div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3">
+              <div className="text-[10px] uppercase tracking-[0.16em] text-amber-200">Weakest Parlay Leg</div>
+              <div className="mt-2 text-sm font-black text-white">{weakest?.weakestLeg?.game || "No parlay diagnosis yet"}</div>
+              <div className="mt-2 text-xs leading-5 text-slate-300">{weakest?.reason || "The parlay engine will flag the lowest-trust leg when tickets are available."}</div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="grid gap-2">
+          {(pack.invalidationRules || []).slice(0, compact ? 3 : 5).map((rule) => (
+            <div key={rule} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-slate-300">
+              {rule}
+            </div>
+          ))}
+        </div>
       </div>
     </Panel>
   );
@@ -805,6 +868,10 @@ function ParlayPredictionCard({ parlay, selected, onSelect }) {
         <ParlayMiniStat label="Stake" value={dollars.format(parlay.recommendedStake || 0)} />
         <ParlayMiniStat label="Pays" value={dollars.format(parlay.projectedPayout || 0)} tone="text-mint" />
       </div>
+      <div className="mt-2 rounded-lg border border-amber-300/20 bg-amber-300/[0.045] px-3 py-2 text-xs leading-5 text-slate-300">
+        Weakest leg: <span className="font-bold text-white">{parlay.weakestLeg?.betText || parlay.weakestLeg?.marketType || "No diagnosis"}</span>
+        {parlay.weakestLegScore ? <span className="mono text-amber-200"> | {parlay.weakestLegScore}/100</span> : null}
+      </div>
       <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
         {parlay.correlationWarning}
       </div>
@@ -850,6 +917,15 @@ function ParlayDetailPanel({ parlay }) {
           <div className="text-sm leading-6 text-slate-200">{parlay.reasoning}</div>
         </div>
 
+        <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3">
+          <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-amber-200">
+            <ShieldCheck size={13} />
+            Weakest Leg Detection
+          </div>
+          <div className="text-sm font-black text-white">{parlay.weakestLeg?.betText || parlay.weakestLeg?.marketType || "No weak leg detected"}</div>
+          <div className="mt-2 text-xs leading-5 text-slate-300">{parlay.weakestLegReason || "The engine did not find a material weak leg in this ticket."}</div>
+        </div>
+
         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <PriceCard label="Projected payout" value={dollars.format(parlay.projectedPayout)} sub="includes stake" />
           <PriceCard label="Expected value" value={`${signed(parlay.expectedValue)}%`} sub="model payout edge" />
@@ -860,7 +936,7 @@ function ParlayDetailPanel({ parlay }) {
         <ParlayBetTicket parlay={parlay} />
 
         <div className="mt-4">
-          <ParlayLegTable legs={parlay.legs} />
+          <ParlayLegTable legs={parlay.legs} weakestLegId={parlay.weakestLeg?.id} />
         </div>
 
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
@@ -910,6 +986,10 @@ function ParlayBetTicket({ parlay }) {
         <TicketField label="Recommended stake" value={dollars.format(parlay.recommendedStake || 0)} sub="do not chase if it loses" />
         <TicketField label="Projected profit" value={dollars.format(profit)} sub={`${dollars.format(parlay.projectedPayout || 0)} total return`} />
       </div>
+      <div className="mt-3 rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+        Weakest leg to verify first: <span className="font-bold text-white">{parlay.weakestLeg?.betText || parlay.weakestLeg?.marketType || "none flagged"}</span>.
+        {" "}Do not submit if this leg moves worse, loses injury/news support, or drops below the listed confidence.
+      </div>
 
       <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
         <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">How To Place This Parlay</div>
@@ -938,7 +1018,7 @@ function ParlayBetTicket({ parlay }) {
   );
 }
 
-function ParlayLegTable({ legs }) {
+function ParlayLegTable({ legs, weakestLegId }) {
   return (
     <div className="overflow-hidden rounded-lg border border-white/10">
       <div className="parlay-leg-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
@@ -949,11 +1029,14 @@ function ParlayLegTable({ legs }) {
         <div>Edge</div>
         <div>Place / Skip Rule</div>
       </div>
-      {legs.map((leg, index) => (
-        <div key={leg.id} className="parlay-leg-grid border-b border-white/10 px-3 py-3 text-sm last:border-b-0">
+      {legs.map((leg, index) => {
+        const weakest = leg.id === weakestLegId;
+        return (
+        <div key={leg.id} className={`parlay-leg-grid border-b px-3 py-3 text-sm last:border-b-0 ${weakest ? "border-amber-300/25 bg-amber-300/[0.045]" : "border-white/10"}`}>
           <div className="min-w-0">
             <div className="truncate font-bold text-white">{index + 1}. {leg.game}</div>
             <div className="mt-1 truncate text-[11px] text-cyan-200">{leg.sport} | {leg.league}</div>
+            {weakest ? <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-amber-200">Weakest leg</div> : null}
           </div>
           <div className="min-w-0">
             <div className="truncate font-bold text-slate-100">{legBetText(leg)}</div>
@@ -970,7 +1053,7 @@ function ParlayLegTable({ legs }) {
             <div className="mt-1 truncate text-[10px] text-amber-200">Risk {leg.newsRisk}/100 | fair {leg.fairLine || percent(leg.modelProbability || 0)}</div>
           </div>
         </div>
-      ))}
+      );})}
     </div>
   );
 }
@@ -1825,13 +1908,15 @@ function buildIntelligenceBrain(snapshot, selected) {
   const parlay = snapshot.parlays?.[0];
   const riskOffice = snapshot.riskOffice || {};
   const intel = snapshot.intelligence || {};
+  const upgrade = snapshot.intelligenceUpgrade || {};
   const riskScore = Number(riskOffice.riskScore || 0);
   const topScore = Number(target?.score || top?.score || 0);
   const confidence = Math.round(clampValue(
     topScore * 0.45 +
     Number(target?.confidence || 0) * 0.25 +
     (100 - riskScore) * 0.18 +
-    Math.min(100, Number(intel.historyRecords || 0) / 4) * 0.12,
+    Math.min(100, Number(intel.historyRecords || 0) / 4) * 0.08 +
+    Number(upgrade.modelTrust?.score || 0) * 0.04,
     0,
     100,
   ));
@@ -1857,7 +1942,7 @@ function buildIntelligenceBrain(snapshot, selected) {
     reasons: [
       target ? `Best active ticket: ${target.market} ${target.line} at ${target.book}, score ${target.score}.` : "No active ticket is selected.",
       `Portfolio guardrail: ${riskOffice.guardrailStatus || "Review"} with ${riskScore}/100 risk score.`,
-      `Data trust: ${intel.historyRecords || 0} stored signals, ${intel.trackedMarkets || 0} tracked markets, calibration ${intel.calibrationGrade || "learning"}.`,
+      `Data trust: ${intel.historyRecords || 0} stored signals, ${intel.trackedMarkets || 0} tracked markets, model trust ${upgrade.modelTrust?.score || 0}/100.`,
     ],
     routes: [
       {
@@ -1910,6 +1995,7 @@ function buildIntelligenceBrain(snapshot, selected) {
       `${intel.historyRecords || 0} stored pre-entry signals in the local intelligence warehouse.`,
       `${intel.trackedMarkets || 0} markets with line-movement memory.`,
       `Calibration grade: ${intel.calibrationGrade || "Learning"} with ${percent(intel.calibrationError || 0)} average error.`,
+      `Data quality score: ${upgrade.dataQuality?.score || 0}/100 with ${upgrade.noLookahead?.status || "leakage guard active"}.`,
     ],
   };
 }
@@ -1922,11 +2008,13 @@ function BacktestSummary({ backtest }) {
     ["Max DD", `${signed(backtest.maxDrawdown || 0)}u`, "peak-to-trough", ShieldCheck],
     ["CLV+", percent(backtest.clvPositiveRate || 0), "positive closing-line rate", LineChart],
     ["Sharpe", Number(backtest.sharpe || 0).toFixed(2), "risk-adjusted return", Activity],
+    ["Trust", `${backtest.modelTrust?.score || 0}/100`, backtest.modelTrust?.grade || "learning", BrainCircuit],
+    ["Leak Guard", `${backtest.noLookahead?.safeRate || 0}%`, backtest.noLookahead?.status || "active", ShieldCheck],
   ];
 
   return (
     <Panel icon={BarChart3} title="Backtest Summary" action={<span className="status-pill mono text-[10px]">{backtest.window || "Paper model"}</span>}>
-      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         {metrics.map(([label, value, sub, Icon]) => (
           <div key={label} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
             <div className="flex items-center justify-between gap-2">
@@ -1940,6 +2028,7 @@ function BacktestSummary({ backtest }) {
       </div>
       <div className="border-t border-white/10 px-3 py-2 text-xs leading-5 text-slate-400">
         {backtest.note || "Backtest metrics will appear after the strategy engine initializes."}
+        {backtest.noLookahead?.rule ? <div className="mt-1 text-cyan-200">{backtest.noLookahead.rule}</div> : null}
       </div>
     </Panel>
   );
@@ -2127,7 +2216,8 @@ function Sidebar({ activeView, onSelect }) {
 
 function TopBar({ snapshot, connected }) {
   const realOdds = snapshot.dataSource && snapshot.dataSource !== "Synthetic simulation";
-  const modeLabel = snapshot.dataStatus === "error" ? "API ERROR" : realOdds ? "REAL ODDS" : "SIM MODE";
+  const feed = snapshot.feed || {};
+  const modeLabel = snapshot.dataStatus === "error" ? "API COOLDOWN" : realOdds ? "REAL ODDS" : "SIM MODE";
   return (
     <header className="glass sticky top-0 z-20 flex min-h-[66px] flex-wrap items-center justify-between gap-3 border-x-0 border-t-0 px-3 py-3 md:px-5">
       <div className="min-w-0">
@@ -2146,10 +2236,11 @@ function TopBar({ snapshot, connected }) {
             </div>
             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] uppercase tracking-[0.14em] text-slate-400 mono">
               <span>AQX-9.4 Ensemble</span>
-              <span>{snapshot.liveGames} live games</span>
+              <span>{snapshot.liveGames} tracked games</span>
+              <span>{feed.configuredLeagueCount ?? 0} leagues enabled</span>
               <span>{currency.format(snapshot.scanned)} markets scanned</span>
               <span>{snapshot.dataSource || "Synthetic simulation"}</span>
-              {snapshot.dataStatus === "error" ? <span>Provider rejected key; simulation fallback active</span> : null}
+              {snapshot.dataStatus === "error" ? <span>Provider cooldown; simulation fallback active</span> : null}
             </div>
           </div>
         </div>
@@ -2158,6 +2249,7 @@ function TopBar({ snapshot, connected }) {
         <StatusMetric icon={Cable} label="Latency" value={`${snapshot.latency}ms`} />
         <StatusMetric icon={Radar} label="Books" value={snapshot.books} />
         <StatusMetric icon={LineChart} label="History" value={snapshot.intelligence?.historyRecords ?? 0} />
+        <StatusMetric icon={AlarmClock} label="Refresh" value={formatDuration(feed.refreshMs)} />
         <StatusMetric icon={BadgeDollarSign} label="Quota" value={snapshot.requestsRemaining ?? "demo"} />
         <StatusMetric icon={Activity} label="Health" value={percent(snapshot.health)} />
         <button className="icon-button" title="Refresh models" aria-label="Refresh models">
@@ -2265,6 +2357,8 @@ function OpportunityFeed({ opportunities, selectedId, onSelect }) {
                   <div className="grid grid-cols-2 gap-2">
                     <FeedDetailStat label="Kelly" value={`${item.kelly}u`} sub="stake cap" tone="text-mint" />
                     <FeedDetailStat label="Risk" value={item.risk} sub={`${item.volatility}/100 vol`} tone={item.risk === "Elevated" ? "text-amber-200" : "text-slate-100"} />
+                    <FeedDetailStat label="Trust" value={`${item.modelTrustScore || 0}/100`} sub="model trust" tone="text-cyan-200" />
+                    <FeedDetailStat label="Data" value={`${item.dataQualityScore || item.components?.dataQuality || 0}/100`} sub={item.clvTracker?.status || "quality"} tone="text-amber-200" />
                   </div>
                   <div className="mt-3">
                     <div className="mb-1 flex justify-between text-[10px] uppercase tracking-[0.12em] text-slate-500">
@@ -2326,10 +2420,12 @@ function OpportunityDetail({ opportunity }) {
               <span className="status-pill mono text-[10px]">EV {signed(opportunity.ev)}%</span>
               <span className="status-pill mono text-[10px]">Kelly {opportunity.kelly}u</span>
             </div>
-            <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
               <DetailMetric label="AI prob" value={percent(opportunity.aiProbability)} />
               <DetailMetric label="Market" value={percent(opportunity.marketProbability)} />
               <DetailMetric label="Edge" value={signed(opportunity.edge)} />
+              <DetailMetric label="Trust" value={`${opportunity.modelTrustScore || 0}/100`} />
+              <DetailMetric label="Data" value={`${opportunity.dataQualityScore || opportunity.components?.dataQuality || 0}/100`} />
             </div>
           </div>
         </div>
@@ -2436,16 +2532,16 @@ function BetExecutionTicket({ opportunity }) {
         <TicketField label="Max stake" value={`${maxStake}u`} sub={`fractional Kelly from ${opportunity.kelly}u`} />
         <TicketField label="Do not take worse than" value={price || opportunity.line} sub={`fair ${opportunity.fairLine}`} />
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
-        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
-          Place this only if the sportsbook still shows <span className="font-bold text-white">{opportunity.line}</span> or better.
-        </div>
-        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
-          Invalidate if late news, injury, weather, or lineup changes push volatility above <span className="font-bold text-white">{Math.min(95, opportunity.volatility + 10)}/100</span>.
-        </div>
-        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
-          Best use: straight bet first. Add to parlays only when correlation and risk warnings are clean.
-        </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {(opportunity.invalidationRules || [
+          `Place this only if the sportsbook still shows ${opportunity.line} or better.`,
+          `Invalidate if late news, injury, weather, or lineup changes push volatility above ${Math.min(95, opportunity.volatility + 10)}/100.`,
+          "Best use: straight bet first. Add to parlays only when correlation and risk warnings are clean.",
+        ]).slice(0, 4).map((rule) => (
+          <div key={rule} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+            {rule}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -2547,6 +2643,7 @@ function buildRiskNotes(opportunity) {
     `Entry discipline: take this only if the line is still near ${opportunity.line} and the opportunity score remains above ${Math.max(60, opportunity.score - 8)}.`,
     `Sizing: Kelly output is ${opportunity.kelly}u, but reduce stake if your bankroll exposure is already high or if multiple plays share the same game script.`,
     `Market risk: volatility is ${opportunity.volatility}/100, so late injury, lineup, weather, or limit changes can erase the edge quickly.`,
+    `Intelligence: model trust is ${opportunity.modelTrustScore || 0}/100 and data quality is ${opportunity.dataQualityScore || opportunity.components?.dataQuality || 0}/100.`,
   ];
 
   if (opportunity.sharp > opportunity.publicMoney) {
@@ -2795,6 +2892,53 @@ function AnalyticsBox({ label, value, sub }) {
       <div className="mono mt-1 text-xl font-black text-white">{value}</div>
       {sub ? <div className="mt-1 truncate text-[11px] text-slate-500">{sub}</div> : null}
     </div>
+  );
+}
+
+function DataFeedPanel({ snapshot }) {
+  const feed = snapshot.feed || {};
+  const realOdds = feed.mode === "real";
+  const leagues = Array.isArray(feed.configuredLeagues) ? feed.configuredLeagues : [];
+  const visibleLeagues = leagues.slice(0, 12).join(" · ");
+  const hiddenLeagues = Math.max(0, leagues.length - 12);
+  const nextFetch = formatTimestamp(feed.nextFetchAt || snapshot.oddsNextFetchAt);
+  const lastFetch = formatTimestamp(feed.lastFetchAt || snapshot.oddsLastFetchAt);
+  const quota = feed.requestsRemaining ?? snapshot.requestsRemaining ?? "unknown";
+
+  return (
+    <Panel
+      icon={Cable}
+      title="Data Feed"
+      action={<span className={`status-pill mono text-[10px] ${realOdds ? "text-mint" : "text-amber-200"}`}>{feed.accuracyLabel || (realOdds ? "Provider odds" : "Fallback")}</span>}
+    >
+      <div className="grid gap-2 p-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <FeedDetailStat label="Mode" value={realOdds ? "Real odds" : "Fallback"} sub={feed.provider || snapshot.dataSource} tone={realOdds ? "text-mint" : "text-amber-200"} />
+          <FeedDetailStat label="Refresh" value={formatDuration(feed.refreshMs)} sub={`Limit ${feed.limit || "auto"} events`} />
+          <FeedDetailStat label="Next pull" value={nextFetch} sub={feed.rateLimitResetAt ? "cooldown active" : "scheduled retry"} />
+          <FeedDetailStat label="Quota" value={quota} sub="requests remaining" />
+          <FeedDetailStat label="Events" value={feed.events ?? snapshot.liveGames ?? 0} sub={`${feed.books ?? snapshot.books ?? 0} books`} />
+          <FeedDetailStat label="Markets" value={currency.format(feed.markets ?? snapshot.scanned ?? 0)} sub={`${feed.realMarkets ?? 0} real feed`} />
+        </div>
+
+        <div className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Enabled Leagues</div>
+            <div className="mono text-[10px] text-cyan-200">{leagues.length || 0} configured</div>
+          </div>
+          <div className="mt-2 text-xs leading-5 text-slate-300">
+            {visibleLeagues || "No provider leagues configured"}
+            {hiddenLeagues ? ` · +${hiddenLeagues} more` : ""}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-xs leading-5 text-slate-400">
+          <span className="font-bold text-slate-200">Feed detail:</span> {feed.accuracyNote || "Waiting for provider status."}
+          <div className="mt-1 mono text-[10px] text-slate-500">Last pull: {lastFetch}</div>
+          {feed.error ? <div className="mt-1 text-amber-200">{feed.error}</div> : null}
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -3090,6 +3234,16 @@ function formatTimestamp(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not captured yet";
   return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDuration(ms) {
+  const seconds = Math.round(Number(ms || 0) / 1000);
+  if (!seconds) return "manual";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
 }
 
 function buildAssistantAnswer(input, opportunity, snapshot) {
