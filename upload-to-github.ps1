@@ -109,6 +109,7 @@ $files = Get-ChildItem -LiteralPath $Project -Recurse -File -Force | Where-Objec
   $relative = $_.FullName.Substring($Project.Length).TrimStart("\") -replace "\\", "/"
   $parts = $relative -split "/"
   $excludedDirs -notcontains $parts[0] -and
+  $relative -ne "data/athena-intelligence-store.json" -and
   $excludedFiles -notcontains $_.Name -and
   $_.Extension -ne ".zip"
 }

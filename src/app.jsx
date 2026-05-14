@@ -1041,28 +1041,78 @@ function DataModelRegistry({ models }) {
   );
 }
 
+function DataWarehousePanel({ intelligence }) {
+  const tables = intelligence?.dataTables || [];
+  return (
+    <Panel icon={Radar} title="Local Intelligence Warehouse" action={<span className="status-pill mono text-[10px]">{intelligence?.calibrationGrade || "Calibrating"}</span>}>
+      <div className="grid gap-3 p-3">
+        <div className="grid gap-2 sm:grid-cols-4">
+          <DetailMetric label="Signals" value={intelligence?.historyRecords || 0} />
+          <DetailMetric label="Markets" value={intelligence?.trackedMarkets || 0} />
+          <DetailMetric label="Backtests" value={intelligence?.backtestResults || 0} />
+          <DetailMetric label="Cal error" value={percent(intelligence?.calibrationError || 0)} />
+        </div>
+        <div className="warehouse-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+          <div>Table</div>
+          <div>Rows</div>
+          <div>Purpose</div>
+        </div>
+        <div className="max-h-[240px] overflow-y-auto">
+          {tables.map((table) => (
+            <div key={table.name} className="warehouse-grid border-b border-white/10 px-3 py-2 text-sm">
+              <div className="mono truncate font-bold text-cyan-200">{table.name}</div>
+              <div className="mono text-white">{table.rows}</div>
+              <div className="truncate text-slate-400">{table.purpose}</div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-400">
+          Last capture: <span className="mono text-slate-200">{formatTimestamp(intelligence?.lastCaptureAt)}</span>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function RiskOfficeWorkspace({ snapshot }) {
   const opportunities = snapshot.opportunities || [];
   const backtest = snapshot.backtest || {};
+  const riskOffice = snapshot.riskOffice || {};
+  const intelligence = snapshot.intelligence || {};
   return (
     <div className="space-y-3 p-3">
       <WorkspaceHeader
         icon={ShieldCheck}
         title="Risk Office"
-        subtitle="Bankroll exposure, Kelly sizing, volatility control, drawdown guardrails, and concentration risk."
-        stat={`Exposure ${percent(snapshot.bankroll.exposure)}`}
+        subtitle="Bankroll exposure, Kelly sizing, volatility control, drawdown guardrails, concentration risk, and data-trust monitoring."
+        stat={`Risk ${riskOffice.guardrailStatus || "Loading"}`}
       />
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
         <BankrollAnalytics snapshot={snapshot} />
-        <Panel icon={ShieldCheck} title="Risk Limits">
+        <Panel icon={ShieldCheck} title="Risk Guardrails" action={<span className="status-pill mono text-[10px]">{riskOffice.guardrailStatus || "Review"}</span>}>
           <div className="grid gap-2 p-3">
-            <RiskRow label="Max single position" value={`${opportunities[0]?.kelly || 0}u`} />
-            <RiskRow label="Portfolio exposure" value={percent(snapshot.bankroll.exposure)} />
+            <RiskRow label="Max single position" value={`${riskOffice.maxSingle ?? opportunities[0]?.kelly ?? 0}u`} />
+            <RiskRow label="Daily Kelly exposure" value={`${riskOffice.totalKelly ?? 0}u / ${riskOffice.maxDailyExposure ?? 0}u`} />
+            <RiskRow label="Bankroll at risk" value={dollars.format(riskOffice.bankrollAtRisk || 0)} />
+            <RiskRow label="Top matchup exposure" value={`${riskOffice.topMatchup?.label || "N/A"} (${riskOffice.topMatchup?.count || 0})`} />
+            <RiskRow label="Top sport exposure" value={`${riskOffice.topSport?.label || "N/A"} (${riskOffice.topSport?.count || 0})`} />
             <RiskRow label="Drawdown" value={signed(snapshot.bankroll.drawdown)} />
             <RiskRow label="Sharpe" value={snapshot.bankroll.sharpe.toFixed(2)} />
-            <RiskRow label="Stop condition" value={snapshot.bankroll.drawdown < -5 ? "De-risk" : "Normal"} />
+            <RiskRow label="Risk score" value={`${riskOffice.riskScore || 0}/100`} />
           </div>
         </Panel>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+        <Panel icon={AlarmClock} title="Risk Alerts">
+          <div className="grid gap-2 p-3">
+            {(riskOffice.warnings || []).map((warning) => (
+              <div key={warning} className={`rounded-lg border px-3 py-2 text-xs leading-5 ${warning.startsWith("Risk office is clear") ? "border-mint/20 bg-mint/10 text-mint" : "border-amber-300/20 bg-amber-300/[0.06] text-amber-100"}`}>
+                {warning}
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <DataWarehousePanel intelligence={intelligence} />
       </div>
       <BacktestSummary backtest={backtest} />
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
@@ -1097,10 +1147,13 @@ function RiskOfficeWorkspace({ snapshot }) {
 function AssistantWorkspace({ snapshot, selected, messages, query, setQuery, sendMessage }) {
   const prompts = [
     "Explain the best opportunity right now",
+    "Tell me exactly how to place this bet",
     "How much should I bet using Kelly?",
+    "What does the backtest say?",
     "What is the biggest risk on this play?",
     "Find a correlated parlay angle",
     "Explain the sharp market movement",
+    "Is the model calibrated?",
   ];
   return (
     <div className="space-y-3 p-3">
@@ -1683,6 +1736,7 @@ function TopBar({ snapshot, connected }) {
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <StatusMetric icon={Cable} label="Latency" value={`${snapshot.latency}ms`} />
         <StatusMetric icon={Radar} label="Books" value={snapshot.books} />
+        <StatusMetric icon={LineChart} label="History" value={snapshot.intelligence?.historyRecords ?? 0} />
         <StatusMetric icon={BadgeDollarSign} label="Quota" value={snapshot.requestsRemaining ?? "demo"} />
         <StatusMetric icon={Activity} label="Health" value={percent(snapshot.health)} />
         <button className="icon-button" title="Refresh models" aria-label="Refresh models">
@@ -1712,10 +1766,11 @@ function MetricStrip({ snapshot }) {
     ["Kelly Max", `${snapshot.opportunities[0]?.kelly || 0}u`, "Current position cap", BadgeDollarSign, "text-mint"],
     ["BT Win", percent(backtest.winRate || snapshot.bankroll.winRate), `${backtest.bets || 0} backtest bets`, Gauge, "text-cyan-300"],
     ["BT ROI", percent(backtest.roi || snapshot.bankroll.roi), "Backtest return", AreaChart, "text-amber-300"],
+    ["Calib", snapshot.intelligence?.calibrationGrade || "Learning", `${snapshot.intelligence?.historyRecords || 0} stored signals`, Radar, "text-cyan-300"],
   ];
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-7">
       {metrics.map(([label, value, sub, Icon, tone]) => (
         <div
           key={label}
@@ -1882,6 +1937,9 @@ function OpportunityDetail({ opportunity }) {
           <PriceCard label="Fair value" value={opportunity.fairLine} sub={`CLV ${signed(opportunity.clv)}`} />
         </div>
 
+        <BetExecutionTicket opportunity={opportunity} />
+        <MarketMemoryTimeline opportunity={opportunity} />
+
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <OpportunityMiniPanel
             icon={ArrowRightLeft}
@@ -1933,6 +1991,86 @@ function OpportunityDetail({ opportunity }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+function BetExecutionTicket({ opportunity }) {
+  const maxStake = Math.max(0.1, Number(opportunity.kelly || 0) * 0.35).toFixed(2);
+  const price = extractDisplayOdds(opportunity.line);
+  const stale = opportunity.marketMemory?.status === "Check freshness";
+  return (
+    <div className="mt-4 rounded-lg border border-mint/20 bg-mint/10 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-mint">
+          <BadgeDollarSign size={13} />
+          Bet Ticket Detail
+        </div>
+        <span className={`status-pill mono text-[10px] ${stale ? "border-amber-300/30 bg-amber-300/[0.08] text-amber-100" : ""}`}>
+          {opportunity.marketMemory?.status || "Current feed"}
+        </span>
+      </div>
+      <div className="ticket-grid">
+        <TicketField label="Bet to place" value={`${opportunity.market} ${opportunity.line}`} sub={opportunity.matchup} />
+        <TicketField label="Sportsbook" value={opportunity.book} sub={`backup ${opportunity.backupBook}`} />
+        <TicketField label="Max stake" value={`${maxStake}u`} sub={`fractional Kelly from ${opportunity.kelly}u`} />
+        <TicketField label="Do not take worse than" value={price || opportunity.line} sub={`fair ${opportunity.fairLine}`} />
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Place this only if the sportsbook still shows <span className="font-bold text-white">{opportunity.line}</span> or better.
+        </div>
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Invalidate if late news, injury, weather, or lineup changes push volatility above <span className="font-bold text-white">{Math.min(95, opportunity.volatility + 10)}/100</span>.
+        </div>
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Best use: straight bet first. Add to parlays only when correlation and risk warnings are clean.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TicketField({ label, value, sub }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div>
+      <div className="mt-1 truncate text-sm font-black text-white">{value}</div>
+      <div className="mt-1 truncate text-[11px] text-slate-500">{sub}</div>
+    </div>
+  );
+}
+
+function MarketMemoryTimeline({ opportunity }) {
+  const timeline = opportunity.lineTimeline || [];
+  if (!timeline.length) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+          <LineChart size={13} className="text-cyan-300" />
+          Market Timeline
+        </div>
+        <span className="status-pill mono text-[10px]">{opportunity.marketMemory?.summary || `${timeline.length} captures`}</span>
+      </div>
+      <div className="market-timeline-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+        <div>Time</div>
+        <div>Price</div>
+        <div>EV</div>
+        <div>Score</div>
+        <div>Market</div>
+      </div>
+      <div className="max-h-[230px] overflow-y-auto">
+        {timeline.slice().reverse().map((point) => (
+          <div key={point.id} className="market-timeline-grid border-b border-white/10 px-3 py-2 text-sm">
+            <div className="mono text-xs text-slate-500">{point.label}</div>
+            <div className="mono font-bold text-white">{formatAmericanOdds(point.price)}</div>
+            <div className={`mono ${point.ev >= 0 ? "text-mint" : "text-red-300"}`}>{signed(point.ev)}%</div>
+            <div className="mono text-cyan-200">{Math.round(point.score || 0)}</div>
+            <div className="truncate text-slate-400">{point.book} | {point.line}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2008,18 +2146,44 @@ function DetailMetric({ label, value }) {
   );
 }
 
+function buildLockedMarketChartPoints(opportunity) {
+  const timeline = opportunity.lineTimeline || [];
+  if (timeline.length) {
+    return timeline.map((point) => ({
+      label: point.label || formatTimestamp(point.capturedAt),
+      price: normalizeChartNumber(point.price, opportunity.marketProbability),
+      fairPrice: probabilityToAmericanOdds(point.aiProbability || opportunity.aiProbability || 50),
+    }));
+  }
+
+  return (opportunity.lines || []).map((value, index) => ({
+    label: `${index - ((opportunity.lines || []).length - 1)}m`,
+    price: normalizeChartNumber(value, opportunity.marketProbability),
+    fairPrice: normalizeChartNumber(value + Number(opportunity.edge || 0) * 2.8, opportunity.aiProbability),
+  }));
+}
+
 function MarketChart({ opportunity }) {
+  const chartCacheRef = useRef(new Map());
+  const chartPoints = useMemo(() => {
+    if (!opportunity) return [];
+    if (!chartCacheRef.current.has(opportunity.id)) {
+      chartCacheRef.current.set(opportunity.id, buildLockedMarketChartPoints(opportunity));
+    }
+    return chartCacheRef.current.get(opportunity.id) || [];
+  }, [opportunity?.id]);
+  const chartKey = chartPoints.map((point) => `${point.label}:${point.price}:${point.fairPrice}`).join("|");
+
   const canvasRef = useChart((canvas) => {
-    if (!opportunity) return null;
-    const labels = opportunity.lines.map((_, i) => `${i - 23}m`);
+    if (!opportunity || !chartPoints.length) return null;
     return new Chart(canvas, {
       type: "line",
       data: {
-        labels,
+        labels: chartPoints.map((point) => point.label),
         datasets: [
           {
-            label: "Market line",
-            data: opportunity.lines,
+            label: "Locked market price",
+            data: chartPoints.map((point) => point.price),
             borderColor: "#35f6ff",
             backgroundColor: "rgba(53, 246, 255, 0.12)",
             tension: 0.35,
@@ -2028,8 +2192,8 @@ function MarketChart({ opportunity }) {
             borderWidth: 2,
           },
           {
-            label: "AI fair line",
-            data: opportunity.lines.map((value, i) => value + Math.sin(i * 0.5) * 1.7 + opportunity.edge * 0.18),
+            label: "AI fair price",
+            data: chartPoints.map((point) => point.fairPrice),
             borderColor: "#36f2a7",
             backgroundColor: "transparent",
             tension: 0.35,
@@ -2041,23 +2205,24 @@ function MarketChart({ opportunity }) {
       },
       options: chartOptions({ yGrid: true }),
     });
-  }, [opportunity?.id, opportunity?.lines?.join("|")]);
+  }, [opportunity?.id, chartKey]);
 
   if (!opportunity) {
     return (
-      <Panel icon={LineChart} title="Animated Market Flow">
+      <Panel icon={LineChart} title="Locked Market Timeline">
         <div className="p-4 text-sm text-slate-400">No bet matches the active filters.</div>
       </Panel>
     );
   }
 
   return (
-    <Panel icon={LineChart} title="Animated Market Flow">
+    <Panel icon={LineChart} title="Locked Market Timeline" action={<span className="status-pill mono text-[10px]">Chart locked for reading</span>}>
       <div className="p-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
           <span className="status-pill mono text-[10px]">Open {opportunity.opening}</span>
           <span className="status-pill mono text-[10px]">Now {opportunity.line}</span>
           <span className="status-pill mono text-[10px]">Move {signed(opportunity.move)}</span>
+          <span className="status-pill mono text-[10px]">{chartPoints.length} fixed points</span>
         </div>
         <div className="chart-wrap h-[280px]">
           <canvas ref={canvasRef} />
@@ -2434,20 +2599,48 @@ function formatAmericanOdds(value) {
   return number > 0 ? `+${Math.round(number)}` : `${Math.round(number)}`;
 }
 
+function extractDisplayOdds(value = "") {
+  const matches = String(value).match(/[+-]\d{2,4}/g);
+  return matches?.at(-1) || "";
+}
+
+function probabilityToAmericanOdds(probability) {
+  const p = Math.max(0.02, Math.min(0.98, Number(probability || 50) / 100));
+  if (p >= 0.5) return Math.round((-p / (1 - p)) * 100);
+  return Math.round(((1 - p) / p) * 100);
+}
+
+function normalizeChartNumber(value, fallbackProbability = 50) {
+  const number = Number(value);
+  if (Number.isFinite(number)) return Math.round(number);
+  return probabilityToAmericanOdds(fallbackProbability);
+}
+
+function formatTimestamp(value) {
+  if (!value) return "Not captured yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not captured yet";
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function buildAssistantAnswer(input, opportunity, snapshot) {
   const q = input.toLowerCase();
   if (!opportunity) {
     return "No bet matches the active filters right now. Clear filters or lower the minimum score/EV to bring opportunities back into the board.";
   }
+  if (q.includes("place") || q.includes("exactly") || q.includes("how to bet") || q.includes("ticket")) {
+    return `Bet ticket: go to ${opportunity.book}, find ${opportunity.matchup}, choose ${opportunity.market}, and only take ${opportunity.line} or better. Model probability is ${percent(opportunity.aiProbability)} vs ${percent(opportunity.marketProbability)} implied, so the edge is ${signed(opportunity.edge)} points. Suggested size is fractional Kelly: about ${Math.max(0.1, Number(opportunity.kelly || 0) * 0.35).toFixed(2)}u, and invalidate it if the listed price disappears, late injury/news changes, or volatility rises above ${Math.min(95, opportunity.volatility + 10)}/100.`;
+  }
   if (q.includes("kelly") || q.includes("bankroll") || q.includes("size")) {
-    return `${opportunity.matchup} prices at ${signed(opportunity.ev)}% EV with ${opportunity.volatility}% volatility, so I would cap exposure at ${opportunity.kelly} units. Portfolio exposure is already ${percent(snapshot.bankroll.exposure)}, which argues for fractional Kelly rather than full Kelly.`;
+    const riskOffice = snapshot.riskOffice || {};
+    return `${opportunity.matchup} prices at ${signed(opportunity.ev)}% EV with ${opportunity.volatility}% volatility, so full Kelly says ${opportunity.kelly}u but I would use fractional Kelly around ${Math.max(0.1, Number(opportunity.kelly || 0) * 0.35).toFixed(2)}u. Current daily exposure is ${riskOffice.totalKelly ?? "N/A"}u and max single-position limit is ${riskOffice.settings?.maxStakePerBet ?? "N/A"}u, so avoid adding size if you already have correlated exposure.`;
   }
   if (q.includes("prop") || q.includes("player")) {
     const prop = snapshot.props[0];
     return `Best prop on the current board is ${prop.player} ${prop.market}. Projection is ${prop.projection} against a ${prop.line} line, hit rate is ${percent(prop.hitRate)}, and the strongest cause is ${lowerText(prop.correlation)}.`;
   }
   if (q.includes("sharp") || q.includes("movement") || q.includes("reverse")) {
-    return `${opportunity.matchup} shows ${opportunity.sharp}% sharp money against ${opportunity.publicMoney}% public exposure. The line moved ${signed(opportunity.move)} from an opener of ${opportunity.opening}, which is consistent with ${lowerText(opportunity.tags?.[0], "market movement")} rather than ordinary public drift.`;
+    return `${opportunity.matchup} shows ${opportunity.sharp}% sharp money against ${opportunity.publicMoney}% public exposure. The line moved ${signed(opportunity.move)} from an opener of ${opportunity.opening}. Athena has ${opportunity.marketMemory?.captures || 0} local captures on this market, and the current memory says: ${opportunity.marketMemory?.summary || "no stored movement yet"}.`;
   }
   if (q.includes("parlay") || q.includes("correl")) {
     const parlay = snapshot.parlays?.[0];
@@ -2456,8 +2649,17 @@ function buildAssistantAnswer(input, opportunity, snapshot) {
     }
     return `I would only correlate this with markets that share the same game script. The cleanest pairing is ${opportunity.market} plus a pace-sensitive prop, because the model edge is driven by ${lowerText(opportunity.tags?.[2], "model divergence")} and CLV runway.`;
   }
+  if (q.includes("backtest") || q.includes("roi") || q.includes("win rate") || q.includes("historical")) {
+    const backtest = snapshot.backtest || {};
+    return `Backtest status: ${backtest.mode || "Backtest"} over ${backtest.bets || 0} modeled bets, win rate ${percent(backtest.winRate || 0)}, ROI ${percent(backtest.roi || 0)}, profit ${signed(backtest.profit || 0)}u, max drawdown ${signed(backtest.maxDrawdown || 0)}u, and CLV+ ${percent(backtest.clvPositiveRate || 0)}. Data source: ${backtest.window || "baseline"}.`;
+  }
+  if (q.includes("calibrat") || q.includes("trust") || q.includes("accur")) {
+    const intel = snapshot.intelligence || {};
+    return `Model calibration grade is ${intel.calibrationGrade || "learning"} with average calibration error ${percent(intel.calibrationError || 0)}. The local warehouse has ${intel.historyRecords || 0} stored signals across ${intel.trackedMarkets || 0} tracked markets. More live captures and settled results will make this more trustworthy.`;
+  }
   if (q.includes("risk") || q.includes("avoid")) {
-    return `Risk is ${lowerText(opportunity.risk)}. Main concern is ${opportunity.volatility}% volatility, but data quality is ${opportunity.components.dataQuality}/100 and risk-adjusted score is ${opportunity.components.riskAdjusted}/100. I would avoid only if the market moves through fair value or sharp percentage falls below 55%.`;
+    const warnings = snapshot.riskOffice?.warnings || [];
+    return `Risk is ${lowerText(opportunity.risk)}. Main concern is ${opportunity.volatility}% volatility, but data quality is ${opportunity.components.dataQuality}/100 and risk-adjusted score is ${opportunity.components.riskAdjusted}/100. Risk office note: ${warnings[0] || "no current guardrail breach"}`;
   }
   return `${opportunity.matchup} is the current recommendation: ${opportunity.market} ${opportunity.line} at ${opportunity.book}. AI probability is ${percent(opportunity.aiProbability)} versus ${percent(opportunity.marketProbability)} market-implied, producing ${signed(opportunity.edge)} model edge and ${signed(opportunity.ev)}% expected value.`;
 }

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { PARLAY_TABLE_MODELS, buildParlayBacktest, generateParlayPredictions } from "./lib/parlayEngine.js";
 
@@ -51,6 +51,18 @@ const ODDS_LEAGUES = (process.env.ODDS_LEAGUES || "NBA,NFL,MLB,NHL")
   .map((league) => league.trim())
   .filter(Boolean);
 const ODDS_LIMIT = Number(process.env.ODDS_LIMIT || 12);
+const INTELLIGENCE_STORE_PATH = join(ROOT, "data", "athena-intelligence-store.json");
+const HISTORY_CAPTURE_MS = Number(process.env.HISTORY_CAPTURE_MS || 15000);
+const MAX_HISTORY_RECORDS = 1400;
+const MAX_LINE_MOVES_PER_MARKET = 80;
+const DEFAULT_STRATEGY_SETTINGS = {
+  bankroll: 10000,
+  maxStakePerBet: 1.5,
+  maxDailyExposure: 8,
+  maxMarketCorrelation: 3,
+  stopLoss: -6,
+  kellyFraction: 0.35,
+};
 const SGO_CORE_ODD_IDS = [
   "points-away-game-ml-away",
   "points-home-game-ml-home",
@@ -75,6 +87,12 @@ const parlayBoardOrder = new Map();
 const parlayTicketCache = new Map();
 let opportunityOrderCursor = 0;
 let parlayOrderCursor = 0;
+let intelligenceStore = createEmptyIntelligenceStore();
+let lastHistoryCaptureAt = 0;
+let saveStoreTimer = null;
+let lastStoreHash = "";
+
+await loadIntelligenceStore();
 
 const html = `<!doctype html>
 <html lang="en">
@@ -125,7 +143,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-13"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-15"></script>
   </body>
 </html>`;
 
@@ -273,6 +291,65 @@ async function loadLocalEnv() {
   }
 }
 
+function createEmptyIntelligenceStore() {
+  return {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    lastCaptureAt: null,
+    odds_history: [],
+    line_movements: {},
+    parlay_predictions: [],
+    parlay_legs: [],
+    backtest_results: [],
+    bankroll_history: [],
+    strategy_settings: { ...DEFAULT_STRATEGY_SETTINGS },
+  };
+}
+
+async function loadIntelligenceStore() {
+  try {
+    const raw = await readFile(INTELLIGENCE_STORE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    intelligenceStore = {
+      ...createEmptyIntelligenceStore(),
+      ...parsed,
+      odds_history: Array.isArray(parsed.odds_history) ? parsed.odds_history : [],
+      line_movements: parsed.line_movements && typeof parsed.line_movements === "object" ? parsed.line_movements : {},
+      parlay_predictions: Array.isArray(parsed.parlay_predictions) ? parsed.parlay_predictions : [],
+      parlay_legs: Array.isArray(parsed.parlay_legs) ? parsed.parlay_legs : [],
+      backtest_results: Array.isArray(parsed.backtest_results) ? parsed.backtest_results : [],
+      bankroll_history: Array.isArray(parsed.bankroll_history) ? parsed.bankroll_history : [],
+      strategy_settings: {
+        ...DEFAULT_STRATEGY_SETTINGS,
+        ...(parsed.strategy_settings || {}),
+      },
+    };
+  } catch {
+    intelligenceStore = createEmptyIntelligenceStore();
+  }
+}
+
+function scheduleIntelligenceStoreSave() {
+  if (saveStoreTimer) return;
+  saveStoreTimer = setTimeout(() => {
+    saveStoreTimer = null;
+    void saveIntelligenceStore();
+  }, 350);
+}
+
+async function saveIntelligenceStore() {
+  try {
+    const payload = JSON.stringify(intelligenceStore, null, 2);
+    const hash = crypto.createHash("sha1").update(payload).digest("hex");
+    if (hash === lastStoreHash) return;
+    lastStoreHash = hash;
+    await mkdir(join(ROOT, "data"), { recursive: true });
+    await writeFile(INTELLIGENCE_STORE_PATH, payload, "utf8");
+  } catch (error) {
+    console.warn("Unable to save intelligence store:", error instanceof Error ? error.message : error);
+  }
+}
+
 async function refreshOdds() {
   const startedAt = Date.now();
   try {
@@ -394,6 +471,175 @@ function lockParlayTickets(items) {
   return items.map((item) => parlayTicketCache.get(item.id) || item);
 }
 
+function captureIntelligenceSnapshot({ opportunities, props, parlays, now }) {
+  const timestamp = now.getTime();
+  if (timestamp - lastHistoryCaptureAt < HISTORY_CAPTURE_MS) return;
+  lastHistoryCaptureAt = timestamp;
+  const capturedAt = now.toISOString();
+  const records = opportunities.slice(0, 80).map((item) => historyRecordFromOpportunity(item, capturedAt));
+
+  intelligenceStore.lastCaptureAt = capturedAt;
+  intelligenceStore.odds_history.push(...records);
+  intelligenceStore.odds_history = intelligenceStore.odds_history.slice(-MAX_HISTORY_RECORDS);
+
+  for (const record of records) {
+    const moves = intelligenceStore.line_movements[record.id] || [];
+    const previous = moves.at(-1);
+    if (!previous || previous.price !== record.price || previous.line !== record.line || previous.score !== record.score) {
+      moves.push({
+        capturedAt,
+        price: record.price,
+        line: record.line,
+        book: record.book,
+        ev: record.ev,
+        score: record.score,
+        aiProbability: record.aiProbability,
+        marketProbability: record.marketProbability,
+      });
+      intelligenceStore.line_movements[record.id] = moves.slice(-MAX_LINE_MOVES_PER_MARKET);
+    }
+  }
+
+  intelligenceStore.parlay_predictions = [
+    ...intelligenceStore.parlay_predictions,
+    ...parlays.map((parlay) => ({
+      id: `${parlay.id}-${capturedAt}`,
+      parlayId: parlay.id,
+      created_at: capturedAt,
+      sport: parlay.sport,
+      league: parlay.league,
+      legs: parlay.legs.length,
+      odds: parlay.americanOdds,
+      model_probability: parlay.modelProbability,
+      implied_probability: parlay.impliedProbability,
+      expected_value: parlay.expectedValue,
+      confidence: parlay.confidence,
+      risk_score: parlay.riskScore,
+      parlay_score: parlay.parlayScore,
+      status: parlay.status,
+      result: parlay.result,
+      profit_loss: parlay.profitLoss,
+    })),
+  ].slice(-280);
+
+  intelligenceStore.parlay_legs = [
+    ...intelligenceStore.parlay_legs,
+    ...parlays.flatMap((parlay) => parlay.legs.map((leg, index) => ({
+      id: `${parlay.id}-${leg.id}-${capturedAt}`,
+      parlayId: parlay.id,
+      legIndex: index + 1,
+      sourceId: leg.sourceId,
+      sport: leg.sport,
+      league: leg.league,
+      game: leg.game,
+      marketType: leg.marketType,
+      sportsbook: leg.sportsbook,
+      odds: leg.odds,
+      modelProbability: leg.modelProbability,
+      impliedProbability: leg.impliedProbability,
+      edge: leg.edge,
+      confidence: leg.confidence,
+      capturedAt,
+    }))),
+  ].slice(-900);
+
+  scheduleIntelligenceStoreSave();
+}
+
+function historyRecordFromOpportunity(item, capturedAt) {
+  const price = extractAmericanFromLine(item.line) ?? impliedPriceFromProbability(item.marketProbability || 50);
+  return {
+    id: item.id,
+    date: capturedAt.slice(0, 10),
+    capturedAt,
+    matchup: item.matchup,
+    away: item.away,
+    home: item.home,
+    sport: item.sport,
+    league: item.league,
+    market: item.market,
+    book: item.book,
+    line: item.line,
+    fairLine: item.fairLine,
+    opening: item.opening,
+    price,
+    score: Number(item.score || 0),
+    aiProbability: Number(item.aiProbability || 0),
+    marketProbability: Number(item.marketProbability || 0),
+    ev: Number(item.ev || 0),
+    edge: Number(item.edge || 0),
+    clv: Number(item.clv || 0),
+    sharp: Number(item.sharp || 0),
+    publicMoney: Number(item.publicMoney || 0),
+    volatility: Number(item.volatility || 0),
+    confidence: Number(item.confidence || 0),
+    kelly: Number(item.kelly || 0),
+  };
+}
+
+function attachMarketMemory(items, capturedAt) {
+  return items.map((item) => {
+    const timeline = buildOpportunityTimeline(item, capturedAt);
+    const first = timeline[0];
+    const last = timeline.at(-1);
+    const previous = timeline.at(-2) || first;
+    const priceChange = first && last ? last.price - first.price : Number(item.move || 0);
+    const recentChange = previous && last ? last.price - previous.price : 0;
+    const lineAgeSeconds = last?.capturedAt ? Math.max(0, Math.round((Date.parse(capturedAt) - Date.parse(last.capturedAt)) / 1000)) : 0;
+    return {
+      ...item,
+      lineTimeline: timeline,
+      marketMemory: {
+        captures: timeline.length,
+        priceChange,
+        recentChange,
+        lineAgeSeconds,
+        status: lineAgeSeconds > Math.max(60, ODDS_REFRESH_MS / 1000 * 3) ? "Check freshness" : "Current feed",
+        summary: `${timeline.length} captures | ${signedNumber(priceChange)} price move | last ${lineAgeSeconds}s ago`,
+      },
+    };
+  });
+}
+
+function buildOpportunityTimeline(item, capturedAt) {
+  const moves = intelligenceStore.line_movements[item.id] || [];
+  if (moves.length >= 2) {
+    return moves.slice(-12).map((move, index) => ({
+      id: `${item.id}-move-${index}`,
+      capturedAt: move.capturedAt,
+      label: shortTime(move.capturedAt),
+      price: Number(move.price || 0),
+      line: move.line,
+      book: move.book,
+      ev: Number(move.ev || 0),
+      score: Number(move.score || 0),
+      aiProbability: Number(move.aiProbability || 0),
+      marketProbability: Number(move.marketProbability || 0),
+    }));
+  }
+
+  const currentPrice = extractAmericanFromLine(item.line) ?? impliedPriceFromProbability(item.marketProbability || 50);
+  const openPrice = extractAmericanFromLine(item.opening) ?? Math.round(currentPrice - Number(item.move || 0) * 8);
+  return Array.from({ length: 8 }, (_, index) => {
+    const progress = index / 7;
+    const price = Math.round(openPrice + (currentPrice - openPrice) * progress + deterministicNoise(`${item.id}-timeline-${index}`, -4, 4));
+    const minutesAgo = (7 - index) * 12;
+    const time = new Date(Date.parse(capturedAt) - minutesAgo * 60000).toISOString();
+    return {
+      id: `${item.id}-synthetic-${index}`,
+      capturedAt: time,
+      label: `${minutesAgo}m`,
+      price,
+      line: index === 0 ? item.opening : item.line,
+      book: item.book,
+      ev: round(Number(item.ev || 0) - (7 - index) * 0.12, 1),
+      score: Math.round(clamp(Number(item.score || 0) - (7 - index) * 0.45, 0, 100)),
+      aiProbability: round(Number(item.aiProbability || 0), 1),
+      marketProbability: round(Number(item.marketProbability || 0) + (7 - index) * 0.08, 1),
+    };
+  });
+}
+
 function buildSnapshot(frameIndex) {
   const now = new Date();
   const realOpportunities = oddsState.events
@@ -401,16 +647,20 @@ function buildSnapshot(frameIndex) {
     .sort((a, b) => b.score - a.score);
   const demoOpportunities = teams.map((match, index) => opportunity(match, index, frameIndex))
     .sort((a, b) => b.score - a.score);
-  const opportunities = lockOpportunityBoardOrder(realOpportunities.length ? realOpportunities : demoOpportunities).slice(0, 80);
+  let opportunities = lockOpportunityBoardOrder(realOpportunities.length ? realOpportunities : demoOpportunities).slice(0, 80);
   const liveGames = oddsState.events.length || (284 + Math.round(wave(frameIndex, 0.2, 21)));
   const bookCount = realOpportunities.length
     ? new Set(realOpportunities.map((item) => item.book)).size
     : books.length;
-  const backtest = buildBacktest(opportunities, frameIndex);
   const props = opportunities.slice(2, 10).map((item, index) => prop(item, index, frameIndex));
   const generatedParlays = generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() });
   const parlays = lockParlayBoardOrder(lockParlayTickets(generatedParlays));
-  const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex });
+  captureIntelligenceSnapshot({ opportunities, props, parlays, now });
+  opportunities = attachMarketMemory(opportunities, now.toISOString());
+  const backtest = buildBacktest(opportunities, frameIndex);
+  const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex: 0 });
+  const riskOffice = buildRiskOffice(opportunities, parlays, backtest, parlayBacktest);
+  const intelligence = buildIntelligenceSummary(backtest, riskOffice);
 
   return {
     generatedAt: now.toISOString(),
@@ -436,6 +686,8 @@ function buildSnapshot(frameIndex) {
       sharpe: backtest.sharpe,
     },
     backtest,
+    riskOffice,
+    intelligence,
     parlays,
     parlayBacktest,
     parlayModels: PARLAY_TABLE_MODELS,
@@ -459,25 +711,24 @@ function buildSnapshot(frameIndex) {
   };
 }
 
-function buildBacktest(opportunities, frameIndex) {
-  const sample = 360;
+function buildBacktest(opportunities) {
+  const source = buildPersistentBacktestSource(opportunities);
   const trades = [];
   let equity = 0;
   let peak = 0;
   let maxDrawdown = 0;
   let staked = 0;
   const returns = [];
-  const source = opportunities.length ? opportunities : teams.map((match, index) => opportunity(match, index, 0));
 
-  for (let i = 0; i < sample; i += 1) {
-    const base = source[i % source.length];
-    const seed = `${base.id || base.matchup}-${i}`;
-    const score = clamp((base.score || 65) + deterministicNoise(`${seed}-score`, -9, 8), 35, 99);
-    const modelProbability = clamp((base.aiProbability || 52) + deterministicNoise(`${seed}-prob`, -5.5, 4.2), 35, 78);
-    const closingEdge = clamp((base.clv || 0) + deterministicNoise(`${seed}-clv`, -2.8, 3.6), -7, 12);
-    const price = extractAmericanFromLine(base.line) ?? impliedPriceFromProbability(base.marketProbability || 50);
-    const stake = round(clamp((base.kelly || 0.7) * (score >= 90 ? 1.08 : score >= 80 ? 0.86 : 0.54), 0.2, 3.8), 2);
-    const winThreshold = clamp(modelProbability + closingEdge * 0.45 - 1.2, 32, 82) / 100;
+  for (let i = 0; i < source.records.length; i += 1) {
+    const base = source.records[i];
+    const seed = `${base.id || base.matchup}-${base.date || i}-${i}`;
+    const score = clamp(Number(base.score || 65) + deterministicNoise(`${seed}-score`, -5.5, 5.5), 35, 99);
+    const modelProbability = clamp(Number(base.aiProbability || 52) + deterministicNoise(`${seed}-prob`, -2.8, 2.4), 35, 78);
+    const closingEdge = clamp(Number(base.clv || 0) + deterministicNoise(`${seed}-clv`, -1.8, 2.4), -7, 12);
+    const price = Number.isFinite(Number(base.price)) ? Number(base.price) : extractAmericanFromLine(base.line) ?? impliedPriceFromProbability(base.marketProbability || 50);
+    const stake = round(clamp(Number(base.kelly || 0.7) * (score >= 90 ? 1.05 : score >= 80 ? 0.82 : 0.52), 0.2, 3.4), 2);
+    const winThreshold = clamp(modelProbability + closingEdge * 0.42 - 1.2, 32, 82) / 100;
     const didWin = deterministicNoise(`${seed}-result`, 0, 1) <= winThreshold;
     const profitPerUnit = price > 0 ? price / 100 : 100 / Math.abs(price || -110);
     const pnl = round(didWin ? stake * profitPerUnit : -stake, 2);
@@ -491,13 +742,16 @@ function buildBacktest(opportunities, frameIndex) {
     trades.push({
       id: `${base.id || base.matchup}-bt-${i}`,
       index: i + 1,
-      date: backtestDate(i, sample),
+      date: base.date || backtestDate(i, source.records.length),
       matchup: base.matchup,
+      sport: base.sport,
+      league: base.league,
       market: base.market,
       book: base.book,
       line: base.line,
       score: Math.round(score),
       stake,
+      price,
       modelProbability: round(modelProbability, 1),
       closingEdge: round(closingEdge, 1),
       ev: round(ev, 1),
@@ -523,10 +777,31 @@ function buildBacktest(opportunities, frameIndex) {
       drawdown: round(trade.equity - Math.max(...trades.slice(0, trade.index).map((item) => item.equity)), 2),
     }));
 
+  intelligenceStore.backtest_results = trades.slice(-260).map((trade) => ({
+    id: trade.id,
+    date: trade.date,
+    matchup: trade.matchup,
+    market: trade.market,
+    book: trade.book,
+    score: trade.score,
+    model_probability: trade.modelProbability,
+    expected_value: trade.ev,
+    stake: trade.stake,
+    result: trade.result,
+    profit_loss: trade.pnl,
+  }));
+  intelligenceStore.bankroll_history = equityCurve.map((point) => ({
+    label: point.label,
+    equity: point.equity,
+    drawdown: point.drawdown,
+  }));
+
   return {
-    mode: "Strategy Paper Backtest",
-    note: "Uses the active model signals and deterministic historical simulation until a settled-bets database is connected.",
-    window: "Last 360 modeled bets",
+    mode: source.mode,
+    note: source.note,
+    window: source.window,
+    sourceRecords: source.records.length,
+    persistedRecords: intelligenceStore.odds_history.length,
     bets: trades.length,
     wins,
     losses,
@@ -544,6 +819,42 @@ function buildBacktest(opportunities, frameIndex) {
     equityCurve,
     recent: trades.slice(-12).reverse(),
   };
+}
+
+function buildPersistentBacktestSource(opportunities) {
+  const stored = intelligenceStore.odds_history || [];
+  if (stored.length >= 40) {
+    return {
+      mode: "Persistent Historical Backtest",
+      note: "Uses locally stored pre-entry odds snapshots from Athena's intelligence store. Outcomes remain deterministic paper settlements until connected to a settled-results feed, but inputs no longer reset every refresh.",
+      window: `Last ${Math.min(360, stored.length)} stored signals`,
+      records: stored.slice(-360),
+    };
+  }
+
+  return {
+    mode: "Seeded Strategy Backtest",
+    note: "Uses a stable seeded backtest until enough live odds snapshots are stored. Keep the app running to build a real local odds history for better testing.",
+    window: "Seeded 360-bet baseline",
+    records: buildSeedHistory(opportunities, 360),
+  };
+}
+
+function buildSeedHistory(opportunities, sample) {
+  const source = opportunities.length ? opportunities : teams.map((match, index) => opportunity(match, index, 0));
+  return Array.from({ length: sample }, (_, index) => {
+    const base = source[index % source.length];
+    const date = backtestDate(index, sample);
+    return {
+      ...historyRecordFromOpportunity(base, `${date}T18:00:00.000Z`),
+      id: `${base.id || base.matchup}-seed-${index}`,
+      date,
+      score: clamp(Number(base.score || 65) + deterministicNoise(`${base.id}-seed-score-${index}`, -8, 8), 35, 99),
+      aiProbability: clamp(Number(base.aiProbability || 52) + deterministicNoise(`${base.id}-seed-prob-${index}`, -4.5, 4), 35, 78),
+      clv: clamp(Number(base.clv || 0) + deterministicNoise(`${base.id}-seed-clv-${index}`, -2.8, 3.6), -7, 12),
+      kelly: clamp(Number(base.kelly || 0.7), 0.2, 3.8),
+    };
+  });
 }
 
 function buildBacktestTiers(trades) {
@@ -805,6 +1116,79 @@ function buildHeatmap(frameIndex) {
   }));
 }
 
+function buildRiskOffice(opportunities, parlays, backtest, parlayBacktest) {
+  const settings = { ...DEFAULT_STRATEGY_SETTINGS, ...(intelligenceStore.strategy_settings || {}) };
+  const totalKelly = round(opportunities.slice(0, 12).reduce((sum, item) => sum + Number(item.kelly || 0), 0), 1);
+  const maxSingle = round(Math.max(0, ...opportunities.map((item) => Number(item.kelly || 0))), 1);
+  const topMatchup = concentrationLeader(opportunities, "matchup");
+  const topSport = concentrationLeader(opportunities, "sport");
+  const highRisk = opportunities.filter((item) => item.risk === "Elevated" || Number(item.volatility || 0) > 62).length;
+  const parlayExposure = round(parlays.reduce((sum, item) => sum + Number(item.recommendedStake || 0), 0), 2);
+  const warnings = [];
+
+  if (maxSingle > settings.maxStakePerBet) warnings.push(`Single bet cap exceeded: top Kelly is ${maxSingle}u vs ${settings.maxStakePerBet}u limit.`);
+  if (totalKelly > settings.maxDailyExposure) warnings.push(`Daily exposure is ${totalKelly}u vs ${settings.maxDailyExposure}u risk limit.`);
+  if (topMatchup.count > settings.maxMarketCorrelation) warnings.push(`Correlation warning: ${topMatchup.label} appears ${topMatchup.count} times in the active board.`);
+  if (highRisk > 3) warnings.push(`${highRisk} elevated-volatility markets are active. Use fractional Kelly and wait for confirmation.`);
+  if (Number(backtest.maxDrawdown || 0) < settings.stopLoss) warnings.push(`Backtest drawdown is through the ${settings.stopLoss}u stop-loss guardrail.`);
+  if (!warnings.length) warnings.push("Risk office is clear: exposure, concentration, and drawdown are inside current limits.");
+
+  return {
+    settings,
+    totalKelly,
+    maxSingle,
+    maxDailyExposure: settings.maxDailyExposure,
+    highRisk,
+    topMatchup,
+    topSport,
+    parlayExposure,
+    bankrollAtRisk: round((totalKelly / 100) * settings.bankroll, 2),
+    riskScore: Math.round(clamp(totalKelly * 6 + highRisk * 5 + Math.max(0, topMatchup.count - 1) * 7 + Math.abs(Math.min(0, backtest.maxDrawdown || 0)) * 2, 0, 100)),
+    guardrailStatus: warnings.length === 1 && warnings[0].startsWith("Risk office is clear") ? "Clear" : "Review",
+    parlayRoi: parlayBacktest.roi,
+    warnings,
+  };
+}
+
+function buildIntelligenceSummary(backtest, riskOffice) {
+  const calibration = backtest.calibration || [];
+  const calibrationError = calibration.length
+    ? round(calibration.reduce((sum, bin) => sum + Math.abs(Number(bin.projected || 0) - Number(bin.actual || 0)), 0) / calibration.length, 1)
+    : 0;
+  return {
+    storePath: INTELLIGENCE_STORE_PATH,
+    lastCaptureAt: intelligenceStore.lastCaptureAt,
+    historyRecords: intelligenceStore.odds_history.length,
+    trackedMarkets: Object.keys(intelligenceStore.line_movements || {}).length,
+    parlayPredictions: intelligenceStore.parlay_predictions.length,
+    backtestResults: intelligenceStore.backtest_results.length,
+    bankrollHistory: intelligenceStore.bankroll_history.length,
+    calibrationError,
+    calibrationGrade: calibrationError <= 4 ? "Excellent" : calibrationError <= 8 ? "Good" : calibrationError <= 12 ? "Needs tuning" : "Uncalibrated",
+    riskStatus: riskOffice.guardrailStatus,
+    dataTables: [
+      { name: "odds_history", rows: intelligenceStore.odds_history.length, purpose: "pre-entry odds, model probability, EV, CLV" },
+      { name: "line_movements", rows: Object.values(intelligenceStore.line_movements || {}).reduce((sum, rows) => sum + rows.length, 0), purpose: "market timeline and price memory" },
+      { name: "parlay_predictions", rows: intelligenceStore.parlay_predictions.length, purpose: "generated parlay tickets and scores" },
+      { name: "parlay_legs", rows: intelligenceStore.parlay_legs.length, purpose: "leg-level odds and model edge" },
+      { name: "backtest_results", rows: intelligenceStore.backtest_results.length, purpose: "paper-settled bet outcomes" },
+      { name: "bankroll_history", rows: intelligenceStore.bankroll_history.length, purpose: "portfolio curve and drawdown path" },
+      { name: "strategy_settings", rows: 1, purpose: "risk limits and Kelly parameters" },
+    ],
+  };
+}
+
+function concentrationLeader(items, key) {
+  const map = new Map();
+  for (const item of items) {
+    const label = item[key] || "Unknown";
+    map.set(label, (map.get(label) || 0) + 1);
+  }
+  return [...map.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count)[0] || { label: "N/A", count: 0 };
+}
+
 function lineForMarket(market, index, frameIndex) {
   if (market.includes("Moneyline") || market.includes("Live ML")) {
     const val = Math.round((wave(index + frameIndex, 0.42, 165) + (index % 2 ? -115 : 120)) / 5) * 5;
@@ -942,6 +1326,17 @@ function titleCase(value = "") {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
+}
+
+function shortTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+  return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+function signedNumber(value, digits = 0) {
+  const number = Number(value || 0);
+  return `${number > 0 ? "+" : ""}${round(number, digits)}`;
 }
 
 function sportFromKey(sportKey = "") {
