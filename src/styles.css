@@ -328,6 +328,12 @@ button {
   align-items: center;
 }
 
+.parlay-ticket-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .filter-field {
   min-width: 0;
   display: grid;
@@ -398,7 +404,7 @@ button {
 
 .parlay-leg-grid {
   display: grid;
-  grid-template-columns: minmax(160px, 1.1fr) minmax(150px, 1fr) 72px 76px 70px minmax(130px, 0.9fr);
+  grid-template-columns: minmax(150px, 0.95fr) minmax(210px, 1.15fr) minmax(110px, 0.7fr) 74px 70px minmax(210px, 1fr);
   gap: 12px;
   align-items: start;
 }
@@ -580,6 +586,10 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .parlay-ticket-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .ticket-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -616,7 +626,8 @@ button {
   .ticket-grid,
   .market-timeline-grid,
   .warehouse-grid,
-  .portfolio-ledger-grid {
+  .portfolio-ledger-grid,
+  .parlay-ticket-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -634,13 +645,13 @@ button {
   }
 
   .parlay-leg-grid {
-    grid-template-columns: minmax(170px, 1fr) 74px 70px;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .parlay-leg-grid > :nth-child(2),
   .parlay-leg-grid > :nth-child(5),
   .parlay-leg-grid > :nth-child(6) {
-    display: none;
+    display: block;
   }
 
   .parlay-history-grid {

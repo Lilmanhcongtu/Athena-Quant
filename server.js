@@ -151,7 +151,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-05"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-06"></script>
   </body>
 </html>`;
 

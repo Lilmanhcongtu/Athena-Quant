@@ -781,6 +781,14 @@ function ParlayPredictionCard({ parlay, selected, onSelect }) {
             {parlay.ticketLockStatus ? <span className="status-pill mono text-[10px]">{parlay.ticketLockStatus}</span> : null}
           </div>
           <div className="mt-1 truncate text-xs text-slate-400">{parlay.legs.map((leg) => leg.game).slice(0, 2).join(" | ")}</div>
+          <div className="mt-2 grid gap-1">
+            {parlay.legs.slice(0, 3).map((leg, index) => (
+              <div key={leg.id} className="truncate text-[11px] text-slate-300">
+                <span className="mono text-cyan-200">Leg {index + 1}</span> {legBetText(leg)} at {leg.sportsbook}
+              </div>
+            ))}
+            {parlay.legs.length > 3 ? <div className="text-[11px] text-slate-500">+ {parlay.legs.length - 3} more legs in detail</div> : null}
+          </div>
         </div>
         <div className="mono text-right">
           <div className="text-2xl font-black text-white">{parlay.parlayScore}</div>
@@ -792,6 +800,10 @@ function ParlayPredictionCard({ parlay, selected, onSelect }) {
         <ParlayMiniStat label="Hit" value={percent(parlay.hitProbability || 0)} />
         <ParlayMiniStat label="EV" value={`${signed(parlay.expectedValue || 0)}%`} tone="text-mint" />
         <ParlayMiniStat label="Risk" value={parlay.riskLevel} tone={riskTone} />
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <ParlayMiniStat label="Stake" value={dollars.format(parlay.recommendedStake || 0)} />
+        <ParlayMiniStat label="Pays" value={dollars.format(parlay.projectedPayout || 0)} tone="text-mint" />
       </div>
       <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
         {parlay.correlationWarning}
@@ -845,6 +857,8 @@ function ParlayDetailPanel({ parlay }) {
           <PriceCard label="Risk level" value={parlay.riskLevel} sub={parlay.correlationLevel} />
         </div>
 
+        <ParlayBetTicket parlay={parlay} />
+
         <div className="mt-4">
           <ParlayLegTable legs={parlay.legs} />
         </div>
@@ -874,16 +888,66 @@ function ParlayDetailPanel({ parlay }) {
   );
 }
 
+function ParlayBetTicket({ parlay }) {
+  const profit = Math.max(0, Number(parlay.projectedPayout || 0) - Number(parlay.recommendedStake || 0));
+  const breakEven = parlay.impliedProbability || impliedPercentFromAmerican(parlay.americanOdds);
+  const steps = buildParlayPlacementSteps(parlay);
+  return (
+    <div className="mt-4 rounded-lg border border-mint/20 bg-mint/10 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-mint">
+          <BadgeDollarSign size={13} />
+          Parlay Bet Ticket
+        </div>
+        <span className="status-pill mono text-[10px]">{parlay.style} | {parlay.legs.length} legs</span>
+      </div>
+
+      <div className="parlay-ticket-grid">
+        <TicketField label="Bet type" value={parlay.label} sub={parlay.strategyFit || parlay.style} />
+        <TicketField label="Add legs" value={`${parlay.legs.length} selections`} sub={parlay.legs.map((leg) => leg.sportsbook).filter(Boolean).slice(0, 2).join(" + ")} />
+        <TicketField label="Target odds" value={formatAmericanOdds(parlay.americanOdds)} sub={`${Number(parlay.decimalOdds || 0).toFixed(2)} decimal`} />
+        <TicketField label="Break-even" value={percent(breakEven || 0)} sub={`model says ${percent(parlay.modelProbability || 0)}`} />
+        <TicketField label="Recommended stake" value={dollars.format(parlay.recommendedStake || 0)} sub="do not chase if it loses" />
+        <TicketField label="Projected profit" value={dollars.format(profit)} sub={`${dollars.format(parlay.projectedPayout || 0)} total return`} />
+      </div>
+
+      <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
+        <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">How To Place This Parlay</div>
+        <div className="grid gap-2">
+          {steps.map((step, index) => (
+            <div key={step} className="flex gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-slate-300">
+              <span className="mono text-cyan-200">{index + 1}</span>
+              <span>{step}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Only place it if every leg still shows the listed odds or better. If one leg moves worse by more than 10 cents, rebuild.
+        </div>
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Keep stake small. Parlays have lower hit probability than straight bets even when EV is positive.
+        </div>
+        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Check injury/news before submit. One late scratch can invalidate the whole ticket.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ParlayLegTable({ legs }) {
   return (
     <div className="overflow-hidden rounded-lg border border-white/10">
       <div className="parlay-leg-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
         <div>Leg</div>
-        <div>Market</div>
-        <div>Odds</div>
+        <div>Exact Bet</div>
+        <div>Book / Odds</div>
         <div>Model</div>
         <div>Edge</div>
-        <div>Risk</div>
+        <div>Place / Skip Rule</div>
       </div>
       {legs.map((leg, index) => (
         <div key={leg.id} className="parlay-leg-grid border-b border-white/10 px-3 py-3 text-sm last:border-b-0">
@@ -892,15 +956,18 @@ function ParlayLegTable({ legs }) {
             <div className="mt-1 truncate text-[11px] text-cyan-200">{leg.sport} | {leg.league}</div>
           </div>
           <div className="min-w-0">
-            <div className="truncate text-slate-200">{leg.marketType}</div>
-            <div className="mt-1 truncate text-[11px] text-slate-500">{leg.sportsbook}</div>
+            <div className="truncate font-bold text-slate-100">{legBetText(leg)}</div>
+            <div className="mt-1 truncate text-[11px] text-slate-500">{leg.marketType}</div>
           </div>
-          <div className="mono text-slate-100">{formatAmericanOdds(leg.odds)}</div>
+          <div className="min-w-0">
+            <div className="truncate text-slate-200">{leg.sportsbook}</div>
+            <div className="mono mt-1 text-slate-100">{formatAmericanOdds(leg.odds)}</div>
+          </div>
           <div className="mono text-cyan-200">{percent(leg.modelProbability || 0)}</div>
           <div className="mono text-mint">{signed(leg.edge || 0)}</div>
           <div>
-            <div className="mono text-amber-200">{leg.newsRisk}/100</div>
-            <div className="mt-1 truncate text-[10px] text-slate-500">{leg.explanation}</div>
+            <div className="text-xs leading-5 text-slate-300">{legPlacementRule(leg)}</div>
+            <div className="mt-1 truncate text-[10px] text-amber-200">Risk {leg.newsRisk}/100 | fair {leg.fairLine || percent(leg.modelProbability || 0)}</div>
           </div>
         </div>
       ))}
@@ -2967,6 +3034,38 @@ function formatAmericanOdds(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "N/A";
   return number > 0 ? `+${Math.round(number)}` : `${Math.round(number)}`;
+}
+
+function impliedPercentFromAmerican(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return 0;
+  if (number > 0) return (100 / (number + 100)) * 100;
+  return (Math.abs(number) / (Math.abs(number) + 100)) * 100;
+}
+
+function legBetText(leg) {
+  const text = String(leg.betText || "").trim();
+  if (text) return text;
+  return `${leg.marketType || "Market"} ${leg.line || formatAmericanOdds(leg.odds)}`.trim();
+}
+
+function legPlacementRule(leg) {
+  const price = formatAmericanOdds(leg.minimumAcceptableOdds ?? leg.odds);
+  const edge = Number(leg.edge || 0);
+  const confidence = Number(leg.confidence || 0);
+  if (edge <= 0) return `Skip if this leg is no longer +EV. Minimum acceptable price: ${price}.`;
+  if (confidence < 60) return `Small-risk leg. Add only if price is ${price} or better and news is clean.`;
+  return `Add if the sportsbook still offers ${price} or better. Skip on late injury/news or worse price.`;
+}
+
+function buildParlayPlacementSteps(parlay) {
+  const primaryBook = parlay.legs[0]?.sportsbook || "your sportsbook";
+  return [
+    `Open ${primaryBook} or a sportsbook where you can add all listed legs to one parlay slip.`,
+    ...parlay.legs.map((leg, index) => `Leg ${index + 1}: ${leg.game} | ${legBetText(leg)} | ${leg.sportsbook} | take ${formatAmericanOdds(leg.odds)} or better.`),
+    `Set stake around ${dollars.format(parlay.recommendedStake || 0)}. Target payout is ${dollars.format(parlay.projectedPayout || 0)} including stake.`,
+    `Before submitting, confirm the final parlay price is near ${formatAmericanOdds(parlay.americanOdds)} and no leg has moved worse by more than 10 cents.`,
+  ];
 }
 
 function extractDisplayOdds(value = "") {
