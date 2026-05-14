@@ -62,6 +62,7 @@ Chart.register(
 const initialSnapshot = JSON.parse(document.getElementById("initial-snapshot").textContent);
 
 const currency = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const dollars = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const percent = (value, digits = 1) => `${Number(value).toFixed(digits)}%`;
 const signed = (value, digits = 1) => `${value > 0 ? "+" : ""}${Number(value).toFixed(digits)}`;
 const lowerText = (value, fallback = "unknown") => String(value ?? fallback).toLowerCase();
@@ -72,6 +73,8 @@ const WORKSPACES = [
   { id: "scanner", label: "Scanner", icon: Search },
   { id: "model", label: "Model Lab", icon: LineChart },
   { id: "props", label: "Props", icon: Trophy },
+  { id: "parlays", label: "Parlays", icon: BadgeDollarSign },
+  { id: "parlaybt", label: "Parlay BT", icon: BarChart3 },
   { id: "risk", label: "Risk", icon: ShieldCheck },
   { id: "assistant", label: "Assistant", icon: MessageSquareText },
 ];
@@ -251,6 +254,12 @@ function WorkspaceRouter({ activeView, snapshot, selected, setSelectedId, messag
   }
   if (activeView === "props") {
     return <PropsWorkspace snapshot={snapshot} />;
+  }
+  if (activeView === "parlays") {
+    return <ParlayBuilderWorkspace snapshot={snapshot} />;
+  }
+  if (activeView === "parlaybt") {
+    return <ParlayBacktestWorkspace snapshot={snapshot} />;
   }
   if (activeView === "risk") {
     return <RiskOfficeWorkspace snapshot={snapshot} />;
@@ -501,6 +510,448 @@ function PropsWorkspace({ snapshot }) {
   );
 }
 
+function ParlayBuilderWorkspace({ snapshot }) {
+  const parlays = snapshot.parlays || [];
+  const [selectedId, setSelectedId] = useState(parlays[0]?.id);
+  const selected = useMemo(() => {
+    return parlays.find((item) => item.id === selectedId) || parlays[0];
+  }, [parlays, selectedId]);
+  const top = parlays[0];
+  const controlled = parlays.filter((item) => item.riskLevel === "Controlled").length;
+  const avgScore = average(parlays, (item) => item.parlayScore || 0);
+  const avgEv = average(parlays, (item) => item.expectedValue || 0);
+
+  return (
+    <div className="space-y-3 p-3">
+      <WorkspaceHeader
+        icon={BadgeDollarSign}
+        title="Parlay Builder AI"
+        subtitle="Professional parlay generator across spreads, totals, moneylines, player props, same-game logic, and mixed-sport baskets."
+        stat={`${parlays.length} ranked parlays`}
+      />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <ScannerMetric label="Top Score" value={top?.parlayScore || 0} sub={top?.label || "waiting for engine"} icon={BrainCircuit} />
+        <ScannerMetric label="Avg EV" value={`${signed(avgEv)}%`} sub="parlay-level expected value" icon={TrendingUp} />
+        <ScannerMetric label="Controlled Risk" value={controlled} sub="risk score below threshold" icon={ShieldCheck} />
+        <ScannerMetric label="Best Payout" value={top ? dollars.format(top.projectedPayout) : "$0"} sub="projected return incl. stake" icon={CircleDollarSign} />
+      </div>
+      <div className="grid gap-3 2xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
+        <Panel icon={BadgeDollarSign} title="AI Ranked Parlay Board" action={<span className="status-pill mono text-[10px]">Correlation Guard Active</span>}>
+          <div className="grid max-h-[780px] gap-2 overflow-y-auto p-3">
+            {parlays.map((parlay) => (
+              <ParlayPredictionCard
+                key={parlay.id}
+                parlay={parlay}
+                selected={selected?.id === parlay.id}
+                onSelect={setSelectedId}
+              />
+            ))}
+          </div>
+        </Panel>
+        <ParlayDetailPanel parlay={selected} />
+      </div>
+    </div>
+  );
+}
+
+function ParlayPredictionCard({ parlay, selected, onSelect }) {
+  const riskTone = parlay.riskLevel === "High" ? "text-red-300" : parlay.riskLevel === "Medium" ? "text-amber-200" : "text-mint";
+  return (
+    <button
+      onClick={() => onSelect(parlay.id)}
+      className={`rounded-lg border px-3 py-3 text-left transition ${selected ? "border-cyan-300/45 bg-cyan-300/[0.08]" : "border-white/10 bg-white/[0.035] hover:border-cyan-300/35 hover:bg-cyan-300/[0.055]"}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mono text-[10px] text-cyan-200">#{parlay.rank}</span>
+            <span className="truncate text-sm font-black text-white">{parlay.label}</span>
+            <span className="status-pill mono text-[10px]">{parlay.style}</span>
+          </div>
+          <div className="mt-1 truncate text-xs text-slate-400">{parlay.legs.map((leg) => leg.game).slice(0, 2).join(" | ")}</div>
+        </div>
+        <div className="mono text-right">
+          <div className="text-2xl font-black text-white">{parlay.parlayScore}</div>
+          <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Score</div>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-4">
+        <ParlayMiniStat label="Odds" value={formatAmericanOdds(parlay.americanOdds)} />
+        <ParlayMiniStat label="Hit" value={percent(parlay.hitProbability || 0)} />
+        <ParlayMiniStat label="EV" value={`${signed(parlay.expectedValue || 0)}%`} tone="text-mint" />
+        <ParlayMiniStat label="Risk" value={parlay.riskLevel} tone={riskTone} />
+      </div>
+      <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+        {parlay.correlationWarning}
+      </div>
+    </button>
+  );
+}
+
+function ParlayDetailPanel({ parlay }) {
+  if (!parlay) return null;
+  const riskTone = parlay.riskLevel === "High" ? "text-red-300" : parlay.riskLevel === "Medium" ? "text-amber-200" : "text-mint";
+  return (
+    <Panel icon={BrainCircuit} title="Parlay Intelligence Detail" action={<span className="status-pill mono text-[10px]">{parlay.strategyFit}</span>}>
+      <div className="p-4">
+        <div className="grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)]">
+          <div className="relative mx-auto">
+            <div className="score-ring mono" style={{ "--p": parlay.parlayScore }}>
+              <div className="z-10 text-center">
+                <div className="text-4xl font-black text-white">{parlay.parlayScore}</div>
+                <div className="mt-1 text-[10px] uppercase tracking-[0.18em] text-cyan-200">Parlay</div>
+              </div>
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-xl font-black text-white">{parlay.label}</div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <span className="status-pill mono text-[10px]">{parlay.legs.length} legs</span>
+              <span className="status-pill mono text-[10px]">Odds {formatAmericanOdds(parlay.americanOdds)}</span>
+              <span className="status-pill mono text-[10px]">Stake {dollars.format(parlay.recommendedStake)}</span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <DetailMetric label="Model" value={percent(parlay.modelProbability || 0)} />
+              <DetailMetric label="Implied" value={percent(parlay.impliedProbability || 0)} />
+              <DetailMetric label="Edge" value={signed(parlay.edge || 0)} />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-cyan-300/20 bg-cyan-300/[0.045] p-3">
+          <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-cyan-200">
+            <Sparkles size={13} />
+            Overall Reasoning
+          </div>
+          <div className="text-sm leading-6 text-slate-200">{parlay.reasoning}</div>
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <PriceCard label="Projected payout" value={dollars.format(parlay.projectedPayout)} sub="includes stake" />
+          <PriceCard label="Expected value" value={`${signed(parlay.expectedValue)}%`} sub="model payout edge" />
+          <PriceCard label="Volatility" value={`${parlay.volatility}/100`} sub={`risk ${parlay.riskScore}/100`} />
+          <PriceCard label="Risk level" value={parlay.riskLevel} sub={parlay.correlationLevel} />
+        </div>
+
+        <div className="mt-4">
+          <ParlayLegTable legs={parlay.legs} />
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <Panel icon={ShieldCheck} title="Risk Warnings">
+            <div className="grid gap-2 p-3">
+              {parlay.riskFactors.map((factor) => (
+                <div key={factor} className={`rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 ${riskTone}`}>
+                  {factor}
+                </div>
+              ))}
+            </div>
+          </Panel>
+          <Panel icon={Target} title="Invalidation Rules">
+            <div className="grid gap-2 p-3">
+              {parlay.invalidationRules.map((rule) => (
+                <div key={rule} className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-slate-300">
+                  {rule}
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function ParlayLegTable({ legs }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-white/10">
+      <div className="parlay-leg-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+        <div>Leg</div>
+        <div>Market</div>
+        <div>Odds</div>
+        <div>Model</div>
+        <div>Edge</div>
+        <div>Risk</div>
+      </div>
+      {legs.map((leg, index) => (
+        <div key={leg.id} className="parlay-leg-grid border-b border-white/10 px-3 py-3 text-sm last:border-b-0">
+          <div className="min-w-0">
+            <div className="truncate font-bold text-white">{index + 1}. {leg.game}</div>
+            <div className="mt-1 truncate text-[11px] text-cyan-200">{leg.sport} | {leg.league}</div>
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-slate-200">{leg.marketType}</div>
+            <div className="mt-1 truncate text-[11px] text-slate-500">{leg.sportsbook}</div>
+          </div>
+          <div className="mono text-slate-100">{formatAmericanOdds(leg.odds)}</div>
+          <div className="mono text-cyan-200">{percent(leg.modelProbability || 0)}</div>
+          <div className="mono text-mint">{signed(leg.edge || 0)}</div>
+          <div>
+            <div className="mono text-amber-200">{leg.newsRisk}/100</div>
+            <div className="mt-1 truncate text-[10px] text-slate-500">{leg.explanation}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ParlayBacktestWorkspace({ snapshot }) {
+  const rawBacktest = snapshot.parlayBacktest || {};
+  const [filters, setFilters] = useState({
+    sport: "All",
+    market: "All",
+    legs: "All",
+    strategy: rawBacktest.settings?.strategy || "balanced",
+    stakingMode: rawBacktest.settings?.stakingMode || "fractional-kelly",
+    minConfidence: rawBacktest.settings?.minConfidence || 58,
+    minEdge: rawBacktest.settings?.minEdge || 1.2,
+    stakeSize: rawBacktest.settings?.stakeSize || 50,
+    bankroll: rawBacktest.settings?.bankroll || 10000,
+  });
+  const results = rawBacktest.results || rawBacktest.history || [];
+  const filteredResults = useMemo(() => {
+    return results.filter((item) => {
+      const sportOk = filters.sport === "All" || item.sport === filters.sport;
+      const marketOk = filters.market === "All" || item.market === filters.market;
+      const legsOk = filters.legs === "All" || Number(item.legs) === Number(filters.legs);
+      return sportOk && marketOk && legsOk;
+    });
+  }, [results, filters.sport, filters.market, filters.legs]);
+  const summary = useMemo(() => summarizeParlayBacktestResults(filteredResults, filters, rawBacktest), [filteredResults, filters, rawBacktest]);
+
+  return (
+    <div className="space-y-3 p-3">
+      <WorkspaceHeader
+        icon={BarChart3}
+        title="Parlay Backtest Lab"
+        subtitle="Historical parlay strategy replay with bankroll simulation, strategy filters, CLV proxy, monthly performance, and no-look-ahead assumptions."
+        stat={`${summary.totalBets} tested parlays`}
+      />
+      <div className="grid gap-3 xl:grid-cols-[minmax(280px,0.42fr)_minmax(0,1fr)]">
+        <StrategySettingsPanel filters={filters} setFilters={setFilters} results={results} />
+        <div className="space-y-3">
+          <ParlayBacktestSummary summary={summary} rawBacktest={rawBacktest} />
+          <ParlayBankrollChart summary={summary} />
+        </div>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)]">
+        <ParlayHistoryTable results={filteredResults.slice(-24).reverse()} />
+        <div className="space-y-3">
+          <ParlayMonthlyPerformance months={summary.monthlyPerformance} />
+          <DataModelRegistry models={snapshot.parlayModels || {}} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StrategySettingsPanel({ filters, setFilters, results }) {
+  const sports = uniqueOptions(results.map((item) => item.sport));
+  const markets = uniqueOptions(results.map((item) => item.market));
+  const legs = uniqueOptions(results.map((item) => String(item.legs))).sort((a, b) => Number(a) - Number(b));
+
+  return (
+    <Panel icon={Gauge} title="Strategy Settings">
+      <div className="grid gap-3 p-3">
+        <SettingSelect label="Sport" value={filters.sport} options={["All", ...sports]} onChange={(value) => setFilters((state) => ({ ...state, sport: value }))} />
+        <SettingSelect label="Market" value={filters.market} options={["All", ...markets]} onChange={(value) => setFilters((state) => ({ ...state, market: value }))} />
+        <SettingSelect label="Legs" value={filters.legs} options={["All", ...legs]} onChange={(value) => setFilters((state) => ({ ...state, legs: value }))} />
+        <SettingSelect label="Strategy" value={filters.strategy} options={["conservative", "balanced", "aggressive"]} onChange={(value) => setFilters((state) => ({ ...state, strategy: value }))} />
+        <SettingSelect label="Staking" value={filters.stakingMode} options={["flat", "fractional-kelly"]} onChange={(value) => setFilters((state) => ({ ...state, stakingMode: value }))} />
+        <SettingInput label="Min confidence" value={filters.minConfidence} suffix="%" onChange={(value) => setFilters((state) => ({ ...state, minConfidence: value }))} />
+        <SettingInput label="Min edge" value={filters.minEdge} suffix="%" onChange={(value) => setFilters((state) => ({ ...state, minEdge: value }))} />
+        <SettingInput label="Stake size" value={filters.stakeSize} prefix="$" onChange={(value) => setFilters((state) => ({ ...state, stakeSize: value }))} />
+        <SettingInput label="Bankroll" value={filters.bankroll} prefix="$" onChange={(value) => setFilters((state) => ({ ...state, bankroll: value }))} />
+        <div className="rounded-lg border border-amber-300/20 bg-amber-300/[0.06] p-3 text-xs leading-5 text-amber-100">
+          Guardrails: max stake per parlay, max daily exposure, max legs allowed, Kelly fraction, and avoid-chasing-losses logic are enforced by the server simulation profile.
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function SettingSelect({ label, value, options, onChange }) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-cyan-300/50"
+      >
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function SettingInput({ label, value, onChange, prefix = "", suffix = "" }) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
+      <div className="flex h-10 items-center rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-slate-400 focus-within:border-cyan-300/50">
+        {prefix ? <span>{prefix}</span> : null}
+        <input
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+          type="number"
+          className="min-w-0 flex-1 bg-transparent px-1 text-white outline-none"
+        />
+        {suffix ? <span>{suffix}</span> : null}
+      </div>
+    </label>
+  );
+}
+
+function ParlayBacktestSummary({ summary, rawBacktest }) {
+  const metrics = [
+    ["Total Bets", summary.totalBets, rawBacktest.mode || "Strategy replay", BadgeDollarSign],
+    ["Win Rate", percent(summary.winRate || 0), "full parlay wins", Target],
+    ["ROI", percent(summary.roi || 0), "profit divided by stake", TrendingUp],
+    ["P/L", dollars.format(summary.profitLoss || 0), "simulated bankroll result", CircleDollarSign],
+    ["Max DD", percent(summary.maxDrawdown || 0), "peak-to-trough", ShieldCheck],
+    ["Avg Odds", formatAmericanOdds(summary.averageOdds || 0), "mean parlay price", BarChart3],
+  ];
+  return (
+    <Panel icon={BarChart3} title="Backtest Results" action={<span className="status-pill mono text-[10px]">CLV {signed(summary.averageClv || 0)}</span>}>
+      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-6">
+        {metrics.map(([label, value, sub, Icon]) => (
+          <div key={label} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
+              <Icon size={14} className="text-cyan-300" />
+            </div>
+            <div className="mono mt-2 text-xl font-black text-white">{value}</div>
+            <div className="mt-1 truncate text-[11px] text-slate-500">{sub}</div>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-white/10 px-3 py-2 text-xs leading-5 text-slate-400">
+        {rawBacktest.note || "No-look-ahead simulation: only pregame probabilities and pre-start market signals are used."}
+      </div>
+    </Panel>
+  );
+}
+
+function ParlayBankrollChart({ summary }) {
+  const canvasRef = useChart((canvas) => {
+    const curve = summary.bankrollHistory || [];
+    return new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: curve.map((item) => item.label),
+        datasets: [
+          {
+            label: "Bankroll",
+            data: curve.map((item) => item.bankroll),
+            borderColor: "#36f2a7",
+            backgroundColor: "rgba(54, 242, 167, 0.13)",
+            pointRadius: 0,
+            fill: true,
+            tension: 0.35,
+          },
+          {
+            label: "Drawdown",
+            data: curve.map((item) => item.drawdown),
+            borderColor: "#ff4f70",
+            pointRadius: 0,
+            fill: false,
+            tension: 0.35,
+          },
+        ],
+      },
+      options: chartOptions({ yGrid: true }),
+    });
+  }, [summary.totalBets, summary.profitLoss, summary.maxDrawdown]);
+
+  return (
+    <Panel icon={AreaChart} title="Bankroll Growth Chart">
+      <div className="p-3">
+        <div className="mb-3 grid gap-2 sm:grid-cols-4">
+          <DetailMetric label="Bankroll" value={dollars.format(summary.endingBankroll || 0)} />
+          <DetailMetric label="Best Sport" value={summary.bestPerformingSport || "N/A"} />
+          <DetailMetric label="Best Market" value={summary.bestPerformingMarket || "N/A"} />
+          <DetailMetric label="Worst Market" value={summary.worstPerformingMarket || "N/A"} />
+        </div>
+        <div className="chart-wrap h-[310px] min-h-[310px]">
+          <canvas ref={canvasRef} />
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function ParlayMonthlyPerformance({ months }) {
+  return (
+    <Panel icon={BarChart3} title="Monthly Performance">
+      <div className="grid gap-2 p-3">
+        {(months || []).slice(-6).map((month) => (
+          <div key={month.month} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="mono text-sm font-bold text-white">{month.month}</span>
+              <span className={`mono text-sm font-bold ${month.profitLoss >= 0 ? "text-mint" : "text-red-300"}`}>{dollars.format(month.profitLoss)}</span>
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <DetailMetric label="Bets" value={month.bets} />
+              <DetailMetric label="Win" value={percent(month.winRate || 0)} />
+              <DetailMetric label="ROI" value={percent(month.roi || 0)} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function ParlayHistoryTable({ results }) {
+  return (
+    <Panel icon={BarChart3} title="Parlay History Table">
+      <div className="parlay-history-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+        <div>Date</div>
+        <div>Type</div>
+        <div>Legs</div>
+        <div>Odds</div>
+        <div>Stake</div>
+        <div>Result</div>
+        <div>P/L</div>
+      </div>
+      <div className="max-h-[520px] overflow-y-auto">
+        {(results || []).map((item) => (
+          <div key={item.id} className="parlay-history-grid border-b border-white/10 px-3 py-2 text-sm">
+            <div className="mono text-xs text-slate-500">{item.date}</div>
+            <div className="truncate font-bold text-white">{item.label || item.type}</div>
+            <div className="mono text-cyan-200">{item.legs}</div>
+            <div className="mono text-slate-200">{formatAmericanOdds(item.odds)}</div>
+            <div className="mono text-slate-300">{dollars.format(item.stake)}</div>
+            <div className={`mono ${item.result === "Win" ? "text-mint" : "text-red-300"}`}>{item.result}</div>
+            <div className={`mono font-bold ${item.profitLoss >= 0 ? "text-mint" : "text-red-300"}`}>{dollars.format(item.profitLoss)}</div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function DataModelRegistry({ models }) {
+  return (
+    <Panel icon={Radar} title="Data Model Registry">
+      <div className="grid max-h-[420px] gap-2 overflow-y-auto p-3">
+        {Object.entries(models).map(([name, fields]) => (
+          <div key={name} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+            <div className="mono text-xs font-bold text-cyan-200">{name}</div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {(fields || []).slice(0, 10).map((field) => (
+                <span key={field} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-[10px] text-slate-400">{field}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 function RiskOfficeWorkspace({ snapshot }) {
   const opportunities = snapshot.opportunities || [];
   const backtest = snapshot.backtest || {};
@@ -646,6 +1097,15 @@ function TableStat({ label, value, tone = "text-white" }) {
   );
 }
 
+function ParlayMiniStat({ label, value, tone = "text-white" }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-2 py-2">
+      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</div>
+      <div className={`mono mt-1 truncate text-sm font-black ${tone}`}>{value}</div>
+    </div>
+  );
+}
+
 function RiskRow({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm">
@@ -653,6 +1113,86 @@ function RiskRow({ label, value }) {
       <span className="mono font-bold text-white">{value}</span>
     </div>
   );
+}
+
+function summarizeParlayBacktestResults(results, filters, rawBacktest) {
+  const startingBankroll = Number(filters.bankroll || rawBacktest.settings?.bankroll || 10000);
+  let bankroll = startingBankroll;
+  let peak = startingBankroll;
+  let maxDrawdown = 0;
+  let totalStaked = 0;
+  const ordered = [...results].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const bankrollHistory = ordered.map((item) => {
+    bankroll += Number(item.profitLoss || 0);
+    peak = Math.max(peak, bankroll);
+    const drawdown = peak ? ((bankroll - peak) / peak) * 100 : 0;
+    maxDrawdown = Math.min(maxDrawdown, drawdown);
+    totalStaked += Number(item.stake || 0);
+    return {
+      label: String(item.date || "").slice(5),
+      bankroll: Number(bankroll.toFixed(2)),
+      drawdown: Number(drawdown.toFixed(2)),
+    };
+  });
+  const wins = ordered.filter((item) => item.result === "Win").length;
+  const profitLoss = bankroll - startingBankroll;
+  const sportPerformance = summarizeBy(ordered, "sport");
+  const marketPerformance = summarizeBy(ordered, "market");
+  return {
+    totalBets: ordered.length,
+    winRate: ordered.length ? (wins / ordered.length) * 100 : 0,
+    roi: totalStaked ? (profitLoss / totalStaked) * 100 : 0,
+    profitLoss,
+    maxDrawdown,
+    averageOdds: ordered.length ? average(ordered, (item) => Number(item.odds || 0)) : 0,
+    averageParlaySize: ordered.length ? average(ordered, (item) => Number(item.legs || 0)) : 0,
+    averageClv: ordered.length ? average(ordered, (item) => Number(item.clv || 0)) : 0,
+    endingBankroll: bankroll,
+    bestPerformingSport: sportPerformance[0]?.label || rawBacktest.bestPerformingSport || "N/A",
+    bestPerformingMarket: marketPerformance[0]?.label || rawBacktest.bestPerformingMarket || "N/A",
+    worstPerformingMarket: marketPerformance.at(-1)?.label || rawBacktest.worstPerformingMarket || "N/A",
+    bankrollHistory: bankrollHistory.filter((_, index) => index % 3 === 0 || index === bankrollHistory.length - 1),
+    monthlyPerformance: summarizeMonthly(ordered),
+  };
+}
+
+function summarizeBy(items, key) {
+  const map = new Map();
+  for (const item of items) {
+    const label = item[key] || "Unknown";
+    const current = map.get(label) || { label, bets: 0, staked: 0, profitLoss: 0 };
+    current.bets += 1;
+    current.staked += Number(item.stake || 0);
+    current.profitLoss += Number(item.profitLoss || 0);
+    map.set(label, current);
+  }
+  return [...map.values()]
+    .map((item) => ({ ...item, roi: item.staked ? (item.profitLoss / item.staked) * 100 : 0 }))
+    .sort((a, b) => b.roi - a.roi);
+}
+
+function summarizeMonthly(items) {
+  const map = new Map();
+  for (const item of items) {
+    const month = String(item.date || "").slice(0, 7) || "N/A";
+    const current = map.get(month) || { month, bets: 0, wins: 0, staked: 0, profitLoss: 0 };
+    current.bets += 1;
+    current.wins += item.result === "Win" ? 1 : 0;
+    current.staked += Number(item.stake || 0);
+    current.profitLoss += Number(item.profitLoss || 0);
+    map.set(month, current);
+  }
+  return [...map.values()].map((item) => ({
+    month: item.month,
+    bets: item.bets,
+    winRate: item.bets ? (item.wins / item.bets) * 100 : 0,
+    roi: item.staked ? (item.profitLoss / item.staked) * 100 : 0,
+    profitLoss: item.profitLoss,
+  }));
+}
+
+function uniqueOptions(values) {
+  return [...new Set(values.filter(Boolean))].sort();
 }
 
 function BacktestSummary({ backtest }) {
@@ -1591,6 +2131,12 @@ function labelize(value) {
   return value.replace(/[A-Z]/g, (match) => ` ${match}`).replace(/^./, (match) => match.toUpperCase()).trim();
 }
 
+function formatAmericanOdds(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "N/A";
+  return number > 0 ? `+${Math.round(number)}` : `${Math.round(number)}`;
+}
+
 function buildAssistantAnswer(input, opportunity, snapshot) {
   const q = input.toLowerCase();
   if (q.includes("kelly") || q.includes("bankroll") || q.includes("size")) {
@@ -1604,6 +2150,10 @@ function buildAssistantAnswer(input, opportunity, snapshot) {
     return `${opportunity.matchup} shows ${opportunity.sharp}% sharp money against ${opportunity.publicMoney}% public exposure. The line moved ${signed(opportunity.move)} from an opener of ${opportunity.opening}, which is consistent with ${lowerText(opportunity.tags?.[0], "market movement")} rather than ordinary public drift.`;
   }
   if (q.includes("parlay") || q.includes("correl")) {
+    const parlay = snapshot.parlays?.[0];
+    if (parlay) {
+      return `${parlay.label} is the top parlay right now with score ${parlay.parlayScore}, odds ${formatAmericanOdds(parlay.americanOdds)}, hit probability ${percent(parlay.hitProbability)}, and EV ${signed(parlay.expectedValue)}%. Main warning: ${parlay.correlationWarning}`;
+    }
     return `I would only correlate this with markets that share the same game script. The cleanest pairing is ${opportunity.market} plus a pace-sensitive prop, because the model edge is driven by ${lowerText(opportunity.tags?.[2], "model divergence")} and CLV runway.`;
   }
   if (q.includes("risk") || q.includes("avoid")) {

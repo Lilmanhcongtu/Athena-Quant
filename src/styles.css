@@ -217,6 +217,20 @@ button {
   grid-template-columns: minmax(112px, 1fr) minmax(156px, 1.3fr) minmax(72px, 0.6fr) minmax(70px, 0.55fr) minmax(74px, 0.6fr);
 }
 
+.parlay-leg-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(150px, 1fr) 72px 76px 70px minmax(130px, 0.9fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.parlay-history-grid {
+  display: grid;
+  grid-template-columns: 92px minmax(160px, 1fr) 58px 78px 86px 72px 86px;
+  gap: 12px;
+  align-items: center;
+}
+
 .terminal-row {
   min-height: 54px;
   border-bottom: 1px solid rgba(156, 180, 214, 0.09);
@@ -403,5 +417,25 @@ button {
 
   .prop-grid {
     grid-template-columns: minmax(94px, 0.8fr) minmax(132px, 1.2fr) 66px 64px;
+  }
+
+  .parlay-leg-grid {
+    grid-template-columns: minmax(170px, 1fr) 74px 70px;
+  }
+
+  .parlay-leg-grid > :nth-child(2),
+  .parlay-leg-grid > :nth-child(5),
+  .parlay-leg-grid > :nth-child(6) {
+    display: none;
+  }
+
+  .parlay-history-grid {
+    grid-template-columns: 84px minmax(140px, 1fr) 58px 76px;
+  }
+
+  .parlay-history-grid > :nth-child(3),
+  .parlay-history-grid > :nth-child(5),
+  .parlay-history-grid > :nth-child(6) {
+    display: none;
   }
 }

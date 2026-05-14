@@ -1,8 +1,8 @@
 # Athena Quant
 
-Institutional-grade AI sports betting intelligence terminal prototype.
+Institutional-grade AI sports betting intelligence terminal prototype with live odds scanning, opportunity scoring, props intelligence, bankroll analytics, and a professional Parlay Builder AI + Parlay Backtest Lab.
 
-Run it with:
+Run locally:
 
 ```powershell
 node server.js
@@ -14,4 +14,17 @@ Then open:
 http://localhost:4173
 ```
 
-The app uses React, Tailwind CDN utilities, Framer Motion, Chart.js, and native WebSockets without requiring a package install.
+Run tests:
+
+```powershell
+npm test
+```
+
+For Render, use:
+
+```text
+Build Command: npm install
+Start Command: node server.js
+```
+
+Set `ODDS_API_KEY` in the host environment. Do not commit `.env.local`.

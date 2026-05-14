@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { PARLAY_TABLE_MODELS, buildParlayBacktest, generateParlayPredictions } from "./lib/parlayEngine.js";
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = process.cwd();
@@ -119,7 +120,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-7"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-9"></script>
   </body>
 </html>`;
 
@@ -368,6 +369,9 @@ function buildSnapshot(frameIndex) {
     ? new Set(realOpportunities.map((item) => item.book)).size
     : books.length;
   const backtest = buildBacktest(opportunities, frameIndex);
+  const props = opportunities.slice(2, 10).map((item, index) => prop(item, index, frameIndex));
+  const parlays = generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() });
+  const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex });
 
   return {
     generatedAt: now.toISOString(),
@@ -393,6 +397,9 @@ function buildSnapshot(frameIndex) {
       sharpe: backtest.sharpe,
     },
     backtest,
+    parlays,
+    parlayBacktest,
+    parlayModels: PARLAY_TABLE_MODELS,
     opportunities,
     live: opportunities.slice(0, 6).map((item, index) => ({
       ...item,
@@ -401,7 +408,7 @@ function buildSnapshot(frameIndex) {
       momentum: clamp(48 + item.edge * 6 + wave(frameIndex + index, 0.53, 24), 8, 96),
       paceDelta: wave(frameIndex + index, 0.29, 8),
     })),
-    props: opportunities.slice(2, 10).map((item, index) => prop(item, index, frameIndex)),
+    props,
     alerts: buildAlerts(frameIndex, opportunities),
     heatmap: buildHeatmap(frameIndex),
     history: Array.from({ length: 36 }, (_, index) => ({
