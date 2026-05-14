@@ -72,6 +72,7 @@ let oddsState = {
 };
 const opportunityBoardOrder = new Map();
 const parlayBoardOrder = new Map();
+const parlayTicketCache = new Map();
 let opportunityOrderCursor = 0;
 let parlayOrderCursor = 0;
 
@@ -124,7 +125,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-12"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260513-13"></script>
   </body>
 </html>`;
 
@@ -380,6 +381,19 @@ function lockParlayBoardOrder(items) {
   return [...items].sort((a, b) => parlayBoardOrder.get(a.id) - parlayBoardOrder.get(b.id));
 }
 
+function lockParlayTickets(items) {
+  for (const item of items) {
+    if (!parlayTicketCache.has(item.id)) {
+      parlayTicketCache.set(item.id, {
+        ...item,
+        ticketLockStatus: "Legs locked for reading",
+        ticketLockedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return items.map((item) => parlayTicketCache.get(item.id) || item);
+}
+
 function buildSnapshot(frameIndex) {
   const now = new Date();
   const realOpportunities = oddsState.events
@@ -394,7 +408,8 @@ function buildSnapshot(frameIndex) {
     : books.length;
   const backtest = buildBacktest(opportunities, frameIndex);
   const props = opportunities.slice(2, 10).map((item, index) => prop(item, index, frameIndex));
-  const parlays = lockParlayBoardOrder(generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() }));
+  const generatedParlays = generateParlayPredictions({ opportunities, props, frameIndex, createdAt: now.toISOString() });
+  const parlays = lockParlayBoardOrder(lockParlayTickets(generatedParlays));
   const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex });
 
   return {

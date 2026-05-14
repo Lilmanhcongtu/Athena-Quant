@@ -655,6 +655,7 @@ function ParlayPredictionCard({ parlay, selected, onSelect }) {
             <span className="mono text-[10px] text-cyan-200">#{parlay.rank}</span>
             <span className="truncate text-sm font-black text-white">{parlay.label}</span>
             <span className="status-pill mono text-[10px]">{parlay.style}</span>
+            {parlay.ticketLockStatus ? <span className="status-pill mono text-[10px]">{parlay.ticketLockStatus}</span> : null}
           </div>
           <div className="mt-1 truncate text-xs text-slate-400">{parlay.legs.map((leg) => leg.game).slice(0, 2).join(" | ")}</div>
         </div>
@@ -680,7 +681,7 @@ function ParlayDetailPanel({ parlay }) {
   if (!parlay) return null;
   const riskTone = parlay.riskLevel === "High" ? "text-red-300" : parlay.riskLevel === "Medium" ? "text-amber-200" : "text-mint";
   return (
-    <Panel icon={BrainCircuit} title="Parlay Intelligence Detail" action={<span className="status-pill mono text-[10px]">{parlay.strategyFit}</span>}>
+    <Panel icon={BrainCircuit} title="Parlay Intelligence Detail" action={<span className="status-pill mono text-[10px]">{parlay.ticketLockStatus || parlay.strategyFit}</span>}>
       <div className="p-4">
         <div className="grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)]">
           <div className="relative mx-auto">
