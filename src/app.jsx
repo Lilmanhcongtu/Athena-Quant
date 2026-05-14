@@ -78,6 +78,16 @@ const WORKSPACES = [
   { id: "assistant", label: "Assistant", icon: MessageSquareText },
 ];
 
+const DEFAULT_BET_FILTERS = {
+  sport: "All",
+  league: "All",
+  market: "All",
+  risk: "All",
+  minScore: 0,
+  minEv: -25,
+  search: "",
+};
+
 function showFatalError(error) {
   const root = document.getElementById("root");
   if (!root) return;
@@ -112,6 +122,7 @@ function App() {
   }, []);
 
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [betFilters, setBetFilters] = useState(DEFAULT_BET_FILTERS);
   const [connected, setConnected] = useState(false);
   const [selectedId, setSelectedId] = useState(initialSnapshot.opportunities[0]?.id);
   const [activeView, setActiveView] = useState("command");
@@ -156,22 +167,24 @@ function App() {
     };
   }, []);
 
+  const filteredSnapshot = useMemo(() => applyBetFilters(snapshot, betFilters), [snapshot, betFilters]);
+
   const selected = useMemo(() => {
-    return snapshot.opportunities.find((item) => item.id === selectedId) || snapshot.opportunities[0];
-  }, [snapshot, selectedId]);
+    return filteredSnapshot.opportunities.find((item) => item.id === selectedId) || filteredSnapshot.opportunities[0];
+  }, [filteredSnapshot, selectedId]);
 
   const tickerItems = useMemo(() => {
-    return snapshot.alerts.concat(snapshot.opportunities.slice(0, 6)).map((item) => {
+    return filteredSnapshot.alerts.concat(filteredSnapshot.opportunities.slice(0, 6)).map((item) => {
       if ("type" in item) return `${item.type} | ${item.matchup} | ${item.market} | ${item.confidence}%`;
       return `${item.label} | ${item.matchup} | EV ${signed(item.ev)}% | ${item.book}`;
     });
-  }, [snapshot]);
+  }, [filteredSnapshot]);
 
   const sendMessage = () => {
     const trimmed = query.trim();
     if (!trimmed) return;
 
-    const answer = buildAssistantAnswer(trimmed, selected, snapshot);
+    const answer = buildAssistantAnswer(trimmed, selected, filteredSnapshot);
     setMessages((items) => [
       ...items,
       { role: "user", text: trimmed },
@@ -196,10 +209,16 @@ function App() {
             </div>
           </div>
 
+          <GlobalBetFilters
+            snapshot={snapshot}
+            filteredSnapshot={filteredSnapshot}
+            filters={betFilters}
+            setFilters={setBetFilters}
+          />
           <WorkspaceTabs activeView={activeView} onSelect={setActiveView} />
           <WorkspaceRouter
             activeView={activeView}
-            snapshot={snapshot}
+            snapshot={filteredSnapshot}
             selected={selected}
             setSelectedId={setSelectedId}
             messages={messages}
@@ -372,6 +391,76 @@ function WorkspaceHeader({ icon: Icon, title, subtitle, stat }) {
         {stat ? <div className="status-pill mono text-[10px]">{stat}</div> : null}
       </div>
     </div>
+  );
+}
+
+function GlobalBetFilters({ snapshot, filteredSnapshot, filters, setFilters }) {
+  const options = useMemo(() => buildBetFilterOptions(snapshot), [snapshot]);
+  const activeFilters = Object.entries(filters).filter(([key, value]) => {
+    if (key === "minScore") return Number(value) > DEFAULT_BET_FILTERS.minScore;
+    if (key === "minEv") return Number(value) > DEFAULT_BET_FILTERS.minEv;
+    if (key === "search") return String(value).trim().length > 0;
+    return value !== "All";
+  }).length;
+  const total = (snapshot.opportunities?.length || 0) + (snapshot.parlays?.length || 0) + (snapshot.props?.length || 0);
+  const visible = (filteredSnapshot.opportunities?.length || 0) + (filteredSnapshot.parlays?.length || 0) + (filteredSnapshot.props?.length || 0);
+
+  const update = (key, value) => setFilters((state) => ({ ...state, [key]: value }));
+
+  return (
+    <div className="border-b border-white/10 bg-black/25 px-3 py-3">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="global-filter-grid">
+          <FilterSelect label="Sport" value={filters.sport} options={options.sports} onChange={(value) => update("sport", value)} />
+          <FilterSelect label="League" value={filters.league} options={options.leagues} onChange={(value) => update("league", value)} />
+          <FilterSelect label="Market" value={filters.market} options={options.markets} onChange={(value) => update("market", value)} />
+          <FilterSelect label="Risk" value={filters.risk} options={options.risks} onChange={(value) => update("risk", value)} />
+          <FilterNumber label="Min score" value={filters.minScore} onChange={(value) => update("minScore", value)} />
+          <FilterNumber label="Min EV" value={filters.minEv} suffix="%" onChange={(value) => update("minEv", value)} />
+          <label className="filter-field xl:col-span-2">
+            <span>Search</span>
+            <input
+              value={filters.search}
+              onChange={(event) => update("search", event.target.value)}
+              placeholder="team, player, sportsbook, market..."
+            />
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+          <div className="status-pill mono text-[10px]">{visible}/{total} bets visible</div>
+          <div className="status-pill mono text-[10px]">{activeFilters} filters active</div>
+          <button
+            className="h-9 rounded-lg border border-white/10 bg-white/[0.035] px-3 text-xs font-bold text-slate-200 transition hover:border-cyan-300/40 hover:bg-cyan-300/[0.08]"
+            onClick={() => setFilters(DEFAULT_BET_FILTERS)}
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilterSelect({ label, value, options, onChange }) {
+  return (
+    <label className="filter-field">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function FilterNumber({ label, value, suffix = "", onChange }) {
+  return (
+    <label className="filter-field">
+      <span>{label}</span>
+      <div className="filter-number">
+        <input type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+        {suffix ? <em>{suffix}</em> : null}
+      </div>
+    </label>
   );
 }
 
@@ -1204,6 +1293,152 @@ function uniqueOptions(values) {
   return [...new Set(values.filter(Boolean))].sort();
 }
 
+function applyBetFilters(snapshot, filters) {
+  const opportunities = (snapshot.opportunities || []).filter((item) => matchesOpportunityFilter(item, filters));
+  const live = (snapshot.live || []).filter((item) => matchesOpportunityFilter(item, filters));
+  const props = (snapshot.props || []).filter((item) => matchesPropFilter(item, filters));
+  const parlays = (snapshot.parlays || []).filter((item) => matchesParlayFilter(item, filters));
+  const alerts = (snapshot.alerts || []).filter((item) => matchesAlertFilter(item, filters, opportunities));
+  return {
+    ...snapshot,
+    opportunities,
+    live,
+    props,
+    parlays,
+    alerts,
+    filteredCounts: {
+      opportunities: opportunities.length,
+      live: live.length,
+      props: props.length,
+      parlays: parlays.length,
+      alerts: alerts.length,
+    },
+  };
+}
+
+function buildBetFilterOptions(snapshot) {
+  const sports = new Set();
+  const leagues = new Set();
+  const markets = new Set();
+  const risks = new Set();
+
+  for (const item of snapshot.opportunities || []) {
+    if (item.sport) sports.add(item.sport);
+    if (item.league) leagues.add(item.league);
+    if (item.market) markets.add(item.market);
+    if (item.risk) risks.add(item.risk);
+  }
+  for (const item of snapshot.props || []) {
+    sports.add(frontendSportFromLeague(item.league));
+    if (item.league) leagues.add(item.league);
+    if (item.market) markets.add(item.market);
+    risks.add(riskFromScore(item.score));
+  }
+  for (const item of snapshot.parlays || []) {
+    if (item.sport) sports.add(item.sport);
+    if (item.league) leagues.add(item.league);
+    if (item.riskLevel) risks.add(item.riskLevel);
+    for (const leg of item.legs || []) {
+      if (leg.sport) sports.add(leg.sport);
+      if (leg.league) leagues.add(leg.league);
+      if (leg.marketType) markets.add(leg.marketType);
+    }
+  }
+
+  return {
+    sports: ["All", ...[...sports].sort()],
+    leagues: ["All", ...[...leagues].sort()],
+    markets: ["All", ...[...markets].sort()],
+    risks: ["All", ...[...risks].sort()],
+  };
+}
+
+function matchesOpportunityFilter(item, filters) {
+  return matchesSharedFilter({
+    sport: item.sport,
+    league: item.league,
+    market: item.market,
+    risk: item.risk,
+    score: item.score,
+    ev: item.ev,
+    text: [item.matchup, item.market, item.book, item.backupBook, item.league, item.sport, item.line, ...(item.tags || [])].join(" "),
+  }, filters);
+}
+
+function matchesPropFilter(item, filters) {
+  return matchesSharedFilter({
+    sport: frontendSportFromLeague(item.league),
+    league: item.league,
+    market: item.market,
+    risk: riskFromScore(item.score),
+    score: item.score,
+    ev: item.ev,
+    text: [item.player, item.team, item.league, item.market, item.correlation].join(" "),
+  }, filters);
+}
+
+function matchesParlayFilter(item, filters) {
+  const legs = item.legs || [];
+  return matchesSharedFilter({
+    sport: [item.sport, ...legs.map((leg) => leg.sport)].join(" "),
+    league: [item.league, ...legs.map((leg) => leg.league)].join(" "),
+    market: legs.map((leg) => leg.marketType).join(" "),
+    risk: item.riskLevel,
+    score: item.parlayScore,
+    ev: item.expectedValue,
+    text: [
+      item.label,
+      item.style,
+      item.riskLevel,
+      item.reasoning,
+      ...legs.flatMap((leg) => [leg.game, leg.marketType, leg.sportsbook, leg.player, leg.team]),
+    ].join(" "),
+  }, filters);
+}
+
+function matchesAlertFilter(item, filters, opportunities) {
+  if (filters.sport === "All" && filters.league === "All" && filters.market === "All" && filters.risk === "All" && Number(filters.minScore) <= 0 && Number(filters.minEv) <= -25 && !filters.search.trim()) {
+    return true;
+  }
+  if (opportunities.some((opportunity) => item.id?.startsWith(opportunity.id))) return true;
+  return textMatches([item.type, item.matchup, item.market, item.book].join(" "), filters.search);
+}
+
+function matchesSharedFilter(item, filters) {
+  const sportOk = filters.sport === "All" || textMatches(item.sport, filters.sport);
+  const leagueOk = filters.league === "All" || textMatches(item.league, filters.league);
+  const marketOk = filters.market === "All" || textMatches(item.market, filters.market);
+  const riskOk = filters.risk === "All" || textMatches(item.risk, filters.risk);
+  const scoreOk = Number(item.score || 0) >= Number(filters.minScore || 0);
+  const evOk = Number(item.ev || 0) >= Number(filters.minEv || -25);
+  const searchOk = textMatches(item.text, filters.search);
+  return sportOk && leagueOk && marketOk && riskOk && scoreOk && evOk && searchOk;
+}
+
+function textMatches(value, needle) {
+  const query = String(needle || "").trim().toLowerCase();
+  if (!query || query === "all") return true;
+  return String(value || "").toLowerCase().includes(query);
+}
+
+function riskFromScore(score) {
+  const value = Number(score || 0);
+  if (value >= 82) return "Controlled";
+  if (value >= 66) return "Medium";
+  return "High";
+}
+
+function frontendSportFromLeague(league = "") {
+  const value = String(league).toUpperCase();
+  if (value.includes("NBA")) return "Basketball";
+  if (value.includes("NFL")) return "Football";
+  if (value.includes("MLB")) return "Baseball";
+  if (value.includes("NHL")) return "Hockey";
+  if (value.includes("ATP") || value.includes("WTA")) return "Tennis";
+  if (value.includes("EPL") || value.includes("LIGA")) return "Soccer";
+  return "Sports";
+}
+
 function BacktestSummary({ backtest }) {
   const metrics = [
     ["Win Rate", percent(backtest.winRate || 0), "settled wins over modeled bets", Target],
@@ -1807,6 +2042,14 @@ function MarketChart({ opportunity }) {
     });
   }, [opportunity?.id, opportunity?.lines?.join("|")]);
 
+  if (!opportunity) {
+    return (
+      <Panel icon={LineChart} title="Animated Market Flow">
+        <div className="p-4 text-sm text-slate-400">No bet matches the active filters.</div>
+      </Panel>
+    );
+  }
+
   return (
     <Panel icon={LineChart} title="Animated Market Flow">
       <div className="p-3">
@@ -1997,6 +2240,7 @@ function MarketDetection({ snapshot }) {
 
 function AISynthesis({ opportunity, snapshot }) {
   const canvasRef = useChart((canvas) => {
+    if (!opportunity) return null;
     const labels = Object.keys(opportunity.components).map(labelize);
     const data = Object.values(opportunity.components);
     return new Chart(canvas, {
@@ -2033,7 +2277,15 @@ function AISynthesis({ opportunity, snapshot }) {
         },
       },
     });
-  }, [opportunity.id, snapshot.generatedAt]);
+  }, [opportunity?.id, snapshot.generatedAt]);
+
+  if (!opportunity) {
+    return (
+      <Panel icon={Sparkles} title="AI Synthesis">
+        <div className="p-4 text-sm text-slate-400">No selected bet matches the active filters.</div>
+      </Panel>
+    );
+  }
 
   return (
     <Panel icon={Sparkles} title="AI Synthesis">
@@ -2183,6 +2435,9 @@ function formatAmericanOdds(value) {
 
 function buildAssistantAnswer(input, opportunity, snapshot) {
   const q = input.toLowerCase();
+  if (!opportunity) {
+    return "No bet matches the active filters right now. Clear filters or lower the minimum score/EV to bring opportunities back into the board.";
+  }
   if (q.includes("kelly") || q.includes("bankroll") || q.includes("size")) {
     return `${opportunity.matchup} prices at ${signed(opportunity.ev)}% EV with ${opportunity.volatility}% volatility, so I would cap exposure at ${opportunity.kelly} units. Portfolio exposure is already ${percent(snapshot.bankroll.exposure)}, which argues for fractional Kelly rather than full Kelly.`;
   }
