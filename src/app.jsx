@@ -196,6 +196,35 @@ function App() {
     setQuery("");
   };
 
+  const logTrackedBet = async (payload) => {
+    const response = await fetch("/api/bets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (data.snapshot) setSnapshot(data.snapshot);
+    return data.bet;
+  };
+
+  const settleTrackedBet = async (id, result) => {
+    const response = await fetch(`/api/bets/${id}/settle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ result }),
+    });
+    const data = await response.json();
+    if (data.snapshot) setSnapshot(data.snapshot);
+    return data.bet;
+  };
+
+  const deleteTrackedBet = async (id) => {
+    const response = await fetch(`/api/bets/${id}`, { method: "DELETE" });
+    const data = await response.json();
+    if (data.snapshot) setSnapshot(data.snapshot);
+    return data.removed;
+  };
+
   return (
     <div className="app-shell">
       <div className="flex min-h-screen">
@@ -228,6 +257,7 @@ function App() {
             query={query}
             setQuery={setQuery}
             sendMessage={sendMessage}
+            betActions={{ logTrackedBet, settleTrackedBet, deleteTrackedBet }}
           />
         </main>
       </div>
@@ -266,7 +296,7 @@ class TerminalErrorBoundary extends React.Component {
   }
 }
 
-function WorkspaceRouter({ activeView, snapshot, selected, setSelectedId, messages, query, setQuery, sendMessage }) {
+function WorkspaceRouter({ activeView, snapshot, selected, setSelectedId, messages, query, setQuery, sendMessage, betActions }) {
   if (activeView === "brain") {
     return <IntelligenceBrainWorkspace snapshot={snapshot} selected={selected} setSelectedId={setSelectedId} />;
   }
@@ -286,7 +316,7 @@ function WorkspaceRouter({ activeView, snapshot, selected, setSelectedId, messag
     return <ParlayBacktestWorkspace snapshot={snapshot} />;
   }
   if (activeView === "portfolio") {
-    return <PortfolioWorkspace snapshot={snapshot} />;
+    return <PortfolioWorkspace snapshot={snapshot} betActions={betActions} />;
   }
   if (activeView === "risk") {
     return <RiskOfficeWorkspace snapshot={snapshot} />;
@@ -346,6 +376,7 @@ function CommandCenterWorkspace({ snapshot, selected, setSelectedId, messages, q
           <MarketChart opportunity={selected} />
           <LiveEngine live={snapshot.live} />
         </div>
+        <GameSchedulePanel schedule={snapshot.schedule || []} />
         <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <PropEngine props={snapshot.props} />
           <BankrollAnalytics snapshot={snapshot} />
@@ -847,7 +878,7 @@ function ParlayPredictionCard({ parlay, selected, onSelect }) {
           <div className="mt-2 grid gap-1">
             {parlay.legs.slice(0, 3).map((leg, index) => (
               <div key={leg.id} className="truncate text-[11px] text-slate-300">
-                <span className="mono text-cyan-200">Leg {index + 1}</span> {legBetText(leg)} at {leg.sportsbook}
+                <span className="mono text-cyan-200">Leg {index + 1}</span> {formatScheduleTime(leg.scheduledAt)} | {legBetText(leg)} at {leg.sportsbook}
               </div>
             ))}
             {parlay.legs.length > 3 ? <div className="text-[11px] text-slate-500">+ {parlay.legs.length - 3} more legs in detail</div> : null}
@@ -1035,7 +1066,7 @@ function ParlayLegTable({ legs, weakestLegId }) {
         <div key={leg.id} className={`parlay-leg-grid border-b px-3 py-3 text-sm last:border-b-0 ${weakest ? "border-amber-300/25 bg-amber-300/[0.045]" : "border-white/10"}`}>
           <div className="min-w-0">
             <div className="truncate font-bold text-white">{index + 1}. {leg.game}</div>
-            <div className="mt-1 truncate text-[11px] text-cyan-200">{leg.sport} | {leg.league}</div>
+            <div className="mt-1 truncate text-[11px] text-cyan-200">{formatScheduleTime(leg.scheduledAt)} | {leg.sport} | {leg.league}</div>
             {weakest ? <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-amber-200">Weakest leg</div> : null}
           </div>
           <div className="min-w-0">
@@ -1417,8 +1448,10 @@ function RiskOfficeWorkspace({ snapshot }) {
   );
 }
 
-function PortfolioWorkspace({ snapshot }) {
+function PortfolioWorkspace({ snapshot, betActions }) {
   const profile = useMemo(() => buildPortfolioProfile(snapshot), [snapshot]);
+  const tracker = snapshot.betTracker || {};
+  const betSummary = tracker.summary || {};
   return (
     <div className="space-y-3 p-3">
       <WorkspaceHeader
@@ -1430,9 +1463,10 @@ function PortfolioWorkspace({ snapshot }) {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <ScannerMetric label="Risk Score" value={`${profile.riskScore}/100`} sub={profile.guardrailStatus} icon={ShieldCheck} />
         <ScannerMetric label="Kelly Exposure" value={`${profile.totalKelly}u`} sub={`${profile.maxSingle}u max single`} icon={BadgeDollarSign} />
-        <ScannerMetric label="Backtest ROI" value={percent(profile.roi || 0)} sub={`${profile.winRate}% win rate`} icon={TrendingUp} />
-        <ScannerMetric label="Drawdown" value={`${signed(profile.drawdown)}u`} sub={`Sharpe ${profile.sharpe}`} icon={AreaChart} />
+        <ScannerMetric label="Real Bet ROI" value={percent(betSummary.roi || 0)} sub={`${betSummary.winRate || 0}% tracked win rate`} icon={TrendingUp} />
+        <ScannerMetric label="Real P/L" value={dollars.format(betSummary.profitLoss || 0)} sub={`${betSummary.openBets || 0} open bets`} icon={AreaChart} />
       </div>
+      <RealBetTrackerPanel snapshot={snapshot} tracker={tracker} betActions={betActions} />
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
         <BankrollAnalytics snapshot={snapshot} />
         <Panel icon={Radar} title="Allocation Brain">
@@ -1469,6 +1503,218 @@ function PortfolioWorkspace({ snapshot }) {
         <BrainChecklist title="Portfolio Warnings" items={profile.warnings} icon={AlarmClock} />
       </div>
       <BacktestSummary backtest={snapshot.backtest || {}} />
+    </div>
+  );
+}
+
+function RealBetTrackerPanel({ snapshot, tracker, betActions }) {
+  const summary = tracker.summary || {};
+  const suggested = tracker.suggested || [];
+  const open = tracker.open || [];
+  const ledger = tracker.ledger || [];
+  const [customBet, setCustomBet] = useState({
+    matchup: "",
+    market: "",
+    line: "-110",
+    book: "",
+    stake: 25,
+    sport: "Sports",
+    league: "Manual",
+    scheduledAt: "",
+  });
+  const [busyId, setBusyId] = useState("");
+
+  const updateCustom = (key, value) => setCustomBet((current) => ({ ...current, [key]: value }));
+  const logBet = async (payload, busyKey = "custom") => {
+    if (!betActions?.logTrackedBet) return;
+    setBusyId(busyKey);
+    try {
+      await betActions.logTrackedBet(payload);
+    } finally {
+      setBusyId("");
+    }
+  };
+  const settle = async (id, result) => {
+    if (!betActions?.settleTrackedBet) return;
+    setBusyId(`${id}-${result}`);
+    try {
+      await betActions.settleTrackedBet(id, result);
+    } finally {
+      setBusyId("");
+    }
+  };
+  const remove = async (id) => {
+    if (!betActions?.deleteTrackedBet) return;
+    setBusyId(`${id}-delete`);
+    try {
+      await betActions.deleteTrackedBet(id);
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  return (
+    <Panel icon={BadgeDollarSign} title="Real Results + Bet Tracker Engine" action={<span className="status-pill mono text-[10px]">{tracker.mode || "Manual Ledger"}</span>}>
+      <div className="grid gap-3 p-3">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+          <AnalyticsBox label="Open" value={summary.openBets || 0} sub={`${dollars.format(summary.openExposure || 0)} exposure`} />
+          <AnalyticsBox label="Settled" value={summary.settledBets || 0} sub={`${summary.wins || 0}W ${summary.losses || 0}L ${summary.pushes || 0}P`} />
+          <AnalyticsBox label="Win Rate" value={percent(summary.winRate || 0)} sub="real logged bets" />
+          <AnalyticsBox label="ROI" value={percent(summary.roi || 0)} sub="settled stake return" />
+          <AnalyticsBox label="P/L" value={dollars.format(summary.profitLoss || 0)} sub={`${dollars.format(summary.currentBankroll || 0)} bankroll`} />
+          <AnalyticsBox label="CLV" value={signed(summary.avgClosingValue || 0)} sub="avg closing value" />
+        </div>
+
+        <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/[0.045] px-3 py-2 text-xs leading-5 text-slate-300">
+          {tracker.note || "Log real bets and settle them when results are final."}
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,0.75fr)_minmax(0,1.25fr)]">
+          <div className="space-y-3">
+            <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+              <div className="mb-3 text-[10px] uppercase tracking-[0.16em] text-slate-500">Log Custom Bet</div>
+              <div className="grid gap-2">
+                <TrackerInput label="Matchup" value={customBet.matchup} onChange={(value) => updateCustom("matchup", value)} placeholder="KC @ BUF" />
+                <TrackerInput label="Market" value={customBet.market} onChange={(value) => updateCustom("market", value)} placeholder="Moneyline / Spread / Prop" />
+                <div className="grid grid-cols-2 gap-2">
+                  <TrackerInput label="Line / Odds" value={customBet.line} onChange={(value) => updateCustom("line", value)} placeholder="-110" />
+                  <TrackerInput label="Stake" value={customBet.stake} onChange={(value) => updateCustom("stake", value)} type="number" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <TrackerInput label="Book" value={customBet.book} onChange={(value) => updateCustom("book", value)} placeholder="DraftKings" />
+                  <TrackerInput label="Sport" value={customBet.sport} onChange={(value) => updateCustom("sport", value)} placeholder="NFL" />
+                </div>
+                <TrackerInput label="Game Time" value={customBet.scheduledAt} onChange={(value) => updateCustom("scheduledAt", value)} type="datetime-local" />
+                <button
+                  className="rounded-lg border border-mint/30 bg-mint/10 px-3 py-2 text-xs font-black uppercase tracking-[0.12em] text-mint transition hover:bg-mint/15"
+                  onClick={() => logBet({ ...customBet, odds: customBet.line, sourceType: "manual" })}
+                  disabled={busyId === "custom"}
+                >
+                  {busyId === "custom" ? "Logging..." : "Log Bet"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+              <div className="mb-3 text-[10px] uppercase tracking-[0.16em] text-slate-500">Suggested From Board</div>
+              <div className="grid gap-2">
+                {suggested.slice(0, 4).map((item) => (
+                  <div key={item.sourceId} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                    <div className="truncate text-sm font-bold text-white">{item.matchup}</div>
+                    <div className="mt-1 truncate text-xs text-slate-400">{formatScheduleTime(item.scheduledAt)} | {item.market} {item.line} | {item.book}</div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <span className="mono text-xs text-mint">{dollars.format(item.stake)} stake</span>
+                      <button
+                        className="rounded-lg border border-cyan-300/25 bg-cyan-300/[0.08] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-200"
+                        onClick={() => logBet(item, item.sourceId)}
+                        disabled={busyId === item.sourceId}
+                      >
+                        {busyId === item.sourceId ? "Adding" : "Track"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <BetLedgerTable title="Open Bets" bets={open} mode="open" busyId={busyId} onSettle={settle} onDelete={remove} />
+            <BetLedgerTable title="Recent Results" bets={ledger.filter((bet) => bet.status === "Settled").slice(0, 8)} mode="settled" busyId={busyId} onDelete={remove} />
+          </div>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <TrackerPerformance title="Real Results By Sport" rows={tracker.performanceBySport || []} />
+          <TrackerPerformance title="Real Results By Market" rows={tracker.performanceByMarket || []} />
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function TrackerInput({ label, value, onChange, placeholder = "", type = "text" }) {
+  return (
+    <label className="filter-field">
+      <span>{label}</span>
+      <input type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function BetLedgerTable({ title, bets, mode, busyId, onSettle, onDelete }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.035]">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-3 py-2">
+        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{title}</div>
+        <div className="mono text-[10px] text-cyan-200">{bets.length} bets</div>
+      </div>
+      <div className="max-h-[360px] overflow-y-auto">
+        {bets.length ? bets.map((bet) => (
+          <div key={bet.id} className="bet-tracker-grid border-b border-white/10 px-3 py-3 text-sm last:border-b-0">
+                <div className="min-w-0">
+                  <div className="truncate font-bold text-white">{bet.matchup}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{formatScheduleTime(bet.scheduledAt)} start | {bet.book}</div>
+              <div className="mt-1 truncate text-[10px] text-slate-600">Logged {formatTimestamp(bet.placedAt)}</div>
+                </div>
+            <div className="min-w-0">
+              <div className="truncate text-slate-300">{bet.market}</div>
+              <div className="mono mt-1 text-[11px] text-cyan-200">{bet.line} | {formatAmericanOdds(bet.odds)}</div>
+            </div>
+            <div className="mono text-mint">{dollars.format(bet.stake || 0)}</div>
+            <div className={`mono ${Number(bet.profitLoss || 0) >= 0 ? "text-mint" : "text-red-300"}`}>{dollars.format(bet.profitLoss || 0)}</div>
+            <div className="flex flex-wrap gap-1">
+              {mode === "open" ? (
+                <>
+                  {["Win", "Loss", "Push"].map((result) => (
+                    <button
+                      key={result}
+                      className="rounded-md border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-bold text-slate-200 transition hover:border-cyan-300/40"
+                      onClick={() => onSettle(bet.id, result)}
+                      disabled={busyId === `${bet.id}-${result}`}
+                    >
+                      {result}
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <span className="status-pill mono text-[10px]">{bet.result}</span>
+              )}
+              <button
+                className="rounded-md border border-red-300/20 bg-red-300/[0.06] px-2 py-1 text-[10px] font-bold text-red-200"
+                onClick={() => onDelete(bet.id)}
+                disabled={busyId === `${bet.id}-delete`}
+              >
+                Del
+              </button>
+            </div>
+          </div>
+        )) : (
+          <div className="px-3 py-5 text-sm text-slate-400">No bets in this section yet.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TrackerPerformance({ title, rows }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+      <div className="mb-3 text-[10px] uppercase tracking-[0.16em] text-slate-500">{title}</div>
+      <div className="grid gap-2">
+        {rows.length ? rows.map((row) => (
+          <div key={row.label} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="truncate font-bold text-white">{row.label}</span>
+              <span className={`mono ${row.profitLoss >= 0 ? "text-mint" : "text-red-300"}`}>{dollars.format(row.profitLoss || 0)}</span>
+            </div>
+            <div className="mt-1 flex justify-between text-[11px] text-slate-500">
+              <span>{row.bets} bets | {percent(row.winRate || 0)} win</span>
+              <span>ROI {percent(row.roi || 0)}</span>
+            </div>
+          </div>
+        )) : <div className="text-sm text-slate-400">Settle bets to build this table.</div>}
+      </div>
     </div>
   );
 }
@@ -1562,7 +1808,7 @@ function CompactOpportunityTable({ opportunities, selected, onSelect }) {
         >
           <div className="min-w-0">
             <div className="truncate text-sm font-bold text-white">{item.matchup}</div>
-            <div className="mt-1 truncate text-xs text-slate-400">{item.league} | {item.market} | {item.line}</div>
+            <div className="mt-1 truncate text-xs text-slate-400">{formatScheduleTime(item.scheduledAt || item.commenceTime)} | {item.league} | {item.market} | {item.line}</div>
           </div>
           <TableStat label="Score" value={item.score} />
           <TableStat label="EV" value={`${signed(item.ev)}%`} tone="text-mint" />
@@ -2333,9 +2579,11 @@ function OpportunityFeed({ opportunities, selectedId, onSelect }) {
                     <span className="status-pill mono text-[10px]">{item.league}</span>
                     <span className="status-pill mono text-[10px]">{item.sport}</span>
                     <span className="status-pill mono text-[10px]">{item.market}</span>
+                    <span className="status-pill mono text-[10px]">{formatScheduleTime(item.scheduledAt || item.commenceTime)}</span>
                   </div>
                   <div className="mt-3 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.045] px-3 py-2 text-xs leading-5 text-slate-200">
                     Bet: <span className="font-bold text-white">{item.market} {item.line}</span> at <span className="text-cyan-200">{item.book}</span>
+                    <div className="mt-1 text-[11px] text-slate-400">Scheduled: <span className="mono text-slate-200">{formatScheduleDateTime(item.scheduledAt || item.commenceTime)}</span> | {scheduleStatus(item.scheduledAt || item.commenceTime)}</div>
                   </div>
                 </div>
 
@@ -2419,6 +2667,7 @@ function OpportunityDetail({ opportunity }) {
               <span className="status-pill mono text-[10px]">{opportunity.label}</span>
               <span className="status-pill mono text-[10px]">EV {signed(opportunity.ev)}%</span>
               <span className="status-pill mono text-[10px]">Kelly {opportunity.kelly}u</span>
+              <span className="status-pill mono text-[10px]">{formatScheduleTime(opportunity.scheduledAt || opportunity.commenceTime)}</span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
               <DetailMetric label="AI prob" value={percent(opportunity.aiProbability)} />
@@ -2452,6 +2701,7 @@ function OpportunityDetail({ opportunity }) {
           <PriceCard label="Alternate" value={opportunity.backupBook} sub="compare before entry" />
           <PriceCard label="Open" value={opportunity.opening} sub={`move ${signed(opportunity.move)}`} />
           <PriceCard label="Fair value" value={opportunity.fairLine} sub={`CLV ${signed(opportunity.clv)}`} />
+          <PriceCard label="Game time" value={formatScheduleTime(opportunity.scheduledAt || opportunity.commenceTime)} sub={scheduleStatus(opportunity.scheduledAt || opportunity.commenceTime)} />
         </div>
 
         <BetExecutionTicket opportunity={opportunity} />
@@ -2531,6 +2781,7 @@ function BetExecutionTicket({ opportunity }) {
         <TicketField label="Sportsbook" value={opportunity.book} sub={`backup ${opportunity.backupBook}`} />
         <TicketField label="Max stake" value={`${maxStake}u`} sub={`fractional Kelly from ${opportunity.kelly}u`} />
         <TicketField label="Do not take worse than" value={price || opportunity.line} sub={`fair ${opportunity.fairLine}`} />
+        <TicketField label="Scheduled start" value={formatScheduleTime(opportunity.scheduledAt || opportunity.commenceTime)} sub={formatScheduleDateTime(opportunity.scheduledAt || opportunity.commenceTime)} />
       </div>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
         {(opportunity.invalidationRules || [
@@ -2745,6 +2996,47 @@ function MarketChart({ opportunity }) {
         <div className="chart-wrap h-[280px]">
           <canvas ref={canvasRef} />
         </div>
+      </div>
+    </Panel>
+  );
+}
+
+function GameSchedulePanel({ schedule }) {
+  const games = schedule || [];
+  return (
+    <Panel icon={AlarmClock} title="Game Schedule Board" action={<span className="status-pill mono text-[10px]">{games.length} games tracked</span>}>
+      <div className="schedule-grid border-b border-white/10 bg-white/[0.025] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500 mono">
+        <div>Start</div>
+        <div>Game</div>
+        <div>League</div>
+        <div>Markets</div>
+        <div>Top Bet</div>
+      </div>
+      <div className="max-h-[390px] overflow-y-auto">
+        {games.map((game) => (
+          <div key={game.id} className="schedule-grid border-b border-white/10 px-3 py-3 text-sm last:border-b-0">
+            <div className="min-w-0">
+              <div className="mono font-black text-white">{formatScheduleTime(game.scheduledAt)}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{scheduleStatus(game.scheduledAt)}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="truncate font-bold text-white">{game.matchup}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{formatScheduleDateTime(game.scheduledAt)}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-cyan-200">{game.league}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{game.sport} | {game.bookCount} books</div>
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-slate-300">{(game.markets || []).join(", ")}</div>
+              <div className="mt-1 text-[11px] text-slate-500">{game.marketCount || 0} markets scanned</div>
+            </div>
+            <div className="min-w-0">
+              <div className="truncate font-bold text-slate-100">{game.topBet ? `${game.topBet.market} ${game.topBet.line}` : "No top bet"}</div>
+              <div className="mt-1 truncate text-[11px] text-mint">EV {signed(game.topBet?.ev || 0)}% | Score {game.topBet?.score || 0}</div>
+            </div>
+          </div>
+        ))}
       </div>
     </Panel>
   );
@@ -3234,6 +3526,32 @@ function formatTimestamp(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Not captured yet";
   return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatScheduleTime(value) {
+  if (!value) return "Time TBD";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time TBD";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatScheduleDateTime(value) {
+  if (!value) return "Schedule TBD";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Schedule TBD";
+  return date.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function scheduleStatus(value) {
+  if (!value) return "Time TBD";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time TBD";
+  const diffMinutes = Math.round((date.getTime() - Date.now()) / 60000);
+  if (diffMinutes > 1440) return `Starts in ${Math.round(diffMinutes / 1440)}d`;
+  if (diffMinutes > 90) return `Starts in ${Math.round(diffMinutes / 60)}h`;
+  if (diffMinutes > 0) return `Starts in ${diffMinutes}m`;
+  if (diffMinutes > -180) return `Started ${Math.abs(diffMinutes)}m ago`;
+  return "Completed / late";
 }
 
 function formatDuration(ms) {

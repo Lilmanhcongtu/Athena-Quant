@@ -194,7 +194,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-08"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-09"></script>
   </body>
 </html>`;
 
@@ -212,6 +212,33 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/snapshot") {
       sendJson(res, buildSnapshot(tick));
+      return;
+    }
+
+    if (url.pathname === "/api/bets" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      const bet = addTrackedBet(body);
+      await saveIntelligenceStore();
+      sendJson(res, { ok: true, bet, snapshot: buildSnapshot(tick) });
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/bets/") && req.method === "POST") {
+      const [, , , betId, action] = url.pathname.split("/");
+      const body = await readJsonBody(req);
+      if (action === "settle") {
+        const bet = settleTrackedBet(betId, body);
+        await saveIntelligenceStore();
+        sendJson(res, { ok: true, bet, snapshot: buildSnapshot(tick) });
+        return;
+      }
+    }
+
+    if (url.pathname.startsWith("/api/bets/") && req.method === "DELETE") {
+      const [, , , betId] = url.pathname.split("/");
+      const removed = deleteTrackedBet(betId);
+      await saveIntelligenceStore();
+      sendJson(res, { ok: true, removed, snapshot: buildSnapshot(tick) });
       return;
     }
 
@@ -298,6 +325,16 @@ function sendJson(res, payload) {
   res.end(JSON.stringify(payload));
 }
 
+async function readJsonBody(req) {
+  let raw = "";
+  for await (const chunk of req) {
+    raw += chunk;
+    if (raw.length > 1_000_000) throw new Error("Request body too large.");
+  }
+  if (!raw.trim()) return {};
+  return JSON.parse(raw);
+}
+
 function frame(data) {
   const payload = Buffer.from(data);
   const length = payload.length;
@@ -353,6 +390,8 @@ function createEmptyIntelligenceStore() {
     parlay_legs: [],
     backtest_results: [],
     bankroll_history: [],
+    bet_ledger: [],
+    settled_results: [],
     strategy_settings: { ...DEFAULT_STRATEGY_SETTINGS },
   };
 }
@@ -372,6 +411,8 @@ async function loadIntelligenceStore() {
       parlay_legs: Array.isArray(parsed.parlay_legs) ? parsed.parlay_legs : [],
       backtest_results: Array.isArray(parsed.backtest_results) ? parsed.backtest_results : [],
       bankroll_history: Array.isArray(parsed.bankroll_history) ? parsed.bankroll_history : [],
+      bet_ledger: Array.isArray(parsed.bet_ledger) ? parsed.bet_ledger : [],
+      settled_results: Array.isArray(parsed.settled_results) ? parsed.settled_results : [],
       strategy_settings: {
         ...DEFAULT_STRATEGY_SETTINGS,
         ...(parsed.strategy_settings || {}),
@@ -401,6 +442,137 @@ async function saveIntelligenceStore() {
   } catch (error) {
     console.warn("Unable to save intelligence store:", error instanceof Error ? error.message : error);
   }
+}
+
+function addTrackedBet(input = {}) {
+  const now = new Date().toISOString();
+  const stake = round(clamp(Number(input.stake || input.recommendedStake || 25), 0.01, 1_000_000), 2);
+  const odds = normalizeBetOdds(input.odds ?? input.americanOdds ?? input.line);
+  const decimalOdds = americanToDecimalLocal(odds);
+  const modelProbability = clamp(Number(input.modelProbability || input.aiProbability || 50), 1, 99);
+  const impliedProbability = round(americanImplied(odds), 1);
+  const expectedValue = Number.isFinite(Number(input.expectedValue))
+    ? round(Number(input.expectedValue), 2)
+    : round((decimalOdds * (modelProbability / 100) - 1) * 100, 2);
+  const bet = {
+    id: `bet-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
+    sourceId: safeText(input.sourceId || input.id || ""),
+    sourceType: safeText(input.sourceType || "manual"),
+    createdAt: now,
+    placedAt: input.placedAt || now,
+    settledAt: null,
+    status: "Open",
+    result: "Pending",
+      matchup: safeText(input.matchup || "Manual bet"),
+      sport: safeText(input.sport || "Sports"),
+      league: safeText(input.league || "SPORT"),
+      scheduledAt: input.scheduledAt || null,
+      startTimeLabel: input.scheduledAt ? shortDateTime(input.scheduledAt) : safeText(input.startTimeLabel || "Time TBD"),
+      market: safeText(input.market || "Market"),
+    line: safeText(input.line || formatAmerican(odds)),
+    book: safeText(input.book || input.sportsbook || "Sportsbook"),
+    odds,
+    decimalOdds: round(decimalOdds, 3),
+    stake,
+    potentialProfit: round(stake * (decimalOdds - 1), 2),
+    potentialPayout: round(stake * decimalOdds, 2),
+    modelProbability: round(modelProbability, 1),
+    impliedProbability,
+    expectedValue,
+    score: Math.round(clamp(Number(input.score || input.parlayScore || 0), 0, 100)),
+    modelTrustScore: Math.round(clamp(Number(input.modelTrustScore || 0), 0, 100)),
+    dataQualityScore: Math.round(clamp(Number(input.dataQualityScore || 0), 0, 100)),
+    clvAtBet: Number.isFinite(Number(input.clv)) ? round(Number(input.clv), 2) : null,
+    closingLine: "",
+    closingOdds: null,
+    closingValue: null,
+    profitLoss: 0,
+    notes: safeText(input.notes || ""),
+  };
+  intelligenceStore.bet_ledger = [bet, ...(intelligenceStore.bet_ledger || [])].slice(0, 600);
+  scheduleIntelligenceStoreSave();
+  return bet;
+}
+
+function settleTrackedBet(id, input = {}) {
+  const ledger = intelligenceStore.bet_ledger || [];
+  const index = ledger.findIndex((bet) => bet.id === id);
+  if (index === -1) throw new Error("Tracked bet not found.");
+  const current = ledger[index];
+  const result = normalizeBetResult(input.result);
+  const closingOdds = input.closingOdds !== undefined && input.closingOdds !== ""
+    ? normalizeBetOdds(input.closingOdds)
+    : null;
+  const profitLoss = calculateBetProfitLoss(current.stake, current.odds, result);
+  const settled = {
+    ...current,
+    status: "Settled",
+    result,
+    settledAt: new Date().toISOString(),
+    closingLine: safeText(input.closingLine || current.closingLine || ""),
+    closingOdds,
+    closingValue: closingOdds ? round(americanImplied(current.odds) - americanImplied(closingOdds), 2) : current.clvAtBet,
+    profitLoss,
+    notes: safeText(input.notes ?? current.notes ?? ""),
+  };
+  ledger[index] = settled;
+  intelligenceStore.bet_ledger = ledger;
+  intelligenceStore.settled_results = [
+    {
+      id: `${settled.id}-result`,
+      betId: settled.id,
+      settledAt: settled.settledAt,
+      matchup: settled.matchup,
+      market: settled.market,
+      result: settled.result,
+      stake: settled.stake,
+      odds: settled.odds,
+      profitLoss: settled.profitLoss,
+      closingValue: settled.closingValue,
+      source: "manual",
+    },
+    ...(intelligenceStore.settled_results || []).filter((item) => item.betId !== settled.id),
+  ].slice(0, 600);
+  scheduleIntelligenceStoreSave();
+  return settled;
+}
+
+function deleteTrackedBet(id) {
+  const before = (intelligenceStore.bet_ledger || []).length;
+  intelligenceStore.bet_ledger = (intelligenceStore.bet_ledger || []).filter((bet) => bet.id !== id);
+  intelligenceStore.settled_results = (intelligenceStore.settled_results || []).filter((item) => item.betId !== id);
+  scheduleIntelligenceStoreSave();
+  return before !== intelligenceStore.bet_ledger.length;
+}
+
+function normalizeBetResult(value) {
+  const result = safeText(value || "Pending").toLowerCase();
+  if (result.includes("win")) return "Win";
+  if (result.includes("loss") || result.includes("lose")) return "Loss";
+  if (result.includes("push") || result.includes("void")) return "Push";
+  return "Pending";
+}
+
+function calculateBetProfitLoss(stake, odds, result) {
+  if (result === "Win") return round(stake * (americanToDecimalLocal(odds) - 1), 2);
+  if (result === "Loss") return round(-stake, 2);
+  return 0;
+}
+
+function normalizeBetOdds(value) {
+  const parsed = parseAmerican(value) ?? extractAmericanFromLine(value);
+  if (Number.isFinite(parsed) && Math.abs(parsed) >= 100) return Math.round(parsed);
+  return -110;
+}
+
+function americanToDecimalLocal(price) {
+  const odds = Number(price);
+  if (!Number.isFinite(odds) || odds === 0) return 1;
+  return odds > 0 ? 1 + odds / 100 : 1 + 100 / Math.abs(odds);
+}
+
+function safeText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
 async function refreshOdds() {
@@ -668,6 +840,8 @@ function historyRecordFromOpportunity(item, capturedAt) {
     home: item.home,
     sport: item.sport,
     league: item.league,
+    scheduledAt: item.scheduledAt || item.commenceTime || null,
+    startTimeLabel: item.startTimeLabel || (item.scheduledAt ? shortDateTime(item.scheduledAt) : "Time TBD"),
     market: item.market,
     book: item.book,
     line: item.line,
@@ -857,12 +1031,14 @@ function buildSnapshot(frameIndex) {
   const parlays = lockParlayBoardOrder(lockParlayTickets(generatedParlays));
   captureIntelligenceSnapshot({ opportunities, props, parlays, now });
   opportunities = attachMarketMemory(opportunities, now.toISOString());
+  const schedule = buildGameSchedule(opportunities);
   const backtest = buildBacktest(opportunities, frameIndex);
   const parlayBacktest = buildParlayBacktest({ parlays, opportunities, props, frameIndex: 0 });
   const riskOffice = buildRiskOffice(opportunities, parlays, backtest, parlayBacktest);
   const intelligence = buildIntelligenceSummary(backtest, riskOffice);
   const marketSanity = buildMarketSanityReport(opportunities, props, parlays);
   const feed = buildFeedSummary({ realEventCount, realOpportunityCount: realOpportunities.length, scannedMarkets, bookCount });
+  const betTracker = buildBetTrackerSummary(opportunities);
   const intelligenceUpgrade = buildIntelligenceUpgradePack({
     opportunities,
     parlays,
@@ -900,11 +1076,13 @@ function buildSnapshot(frameIndex) {
     riskOffice,
     intelligence,
     intelligenceUpgrade,
+    betTracker,
     marketSanity,
     parlays,
     parlayBacktest,
     parlayModels: PARLAY_TABLE_MODELS,
     opportunities,
+    schedule,
     live: opportunities.slice(0, 6).map((item, index) => ({
       ...item,
       clock: liveClockForSport(item.sport, frameIndex, index),
@@ -933,6 +1111,55 @@ function liveClockForSport(sport, frameIndex, index) {
   if (sport === "Golf") return `R${1 + ((frameIndex + index) % 4)}`;
   if (sport === "Hockey") return `P${1 + ((frameIndex + index) % 3)} ${String(18 - ((frameIndex + index) % 12)).padStart(2, "0")}:${String((42 - index * 5 + frameIndex * 7) % 60).padStart(2, "0")}`;
   return `Q${2 + (index % 3)} ${String(11 - ((frameIndex + index) % 8)).padStart(2, "0")}:${String((42 - index * 5 + frameIndex * 7) % 60).padStart(2, "0")}`;
+}
+
+function buildGameSchedule(opportunities) {
+  const byGame = new Map();
+  for (const item of opportunities) {
+    const key = item.matchup || item.id;
+    const existing = byGame.get(key) || {
+      id: `schedule-${key}`,
+      matchup: item.matchup,
+      away: item.away,
+      home: item.home,
+      sport: item.sport,
+      league: item.league,
+      scheduledAt: item.scheduledAt || item.commenceTime || null,
+      startTimeLabel: item.startTimeLabel || "Time TBD",
+      markets: [],
+      books: [],
+      topScore: 0,
+      topEv: -999,
+      topBet: null,
+      source: item.source || "synthetic",
+    };
+    if (!existing.markets.includes(item.market)) existing.markets.push(item.market);
+    if (!existing.books.includes(item.book)) existing.books.push(item.book);
+    if (Number(item.score || 0) > existing.topScore || Number(item.ev || 0) > existing.topEv) {
+      existing.topScore = Number(item.score || 0);
+      existing.topEv = Number(item.ev || 0);
+      existing.topBet = {
+        id: item.id,
+        market: item.market,
+        line: item.line,
+        book: item.book,
+        score: item.score,
+        ev: item.ev,
+      };
+    }
+    byGame.set(key, existing);
+  }
+
+  return [...byGame.values()]
+    .map((game) => ({
+      ...game,
+      markets: game.markets.slice(0, 6),
+      books: game.books.slice(0, 5),
+      marketCount: game.markets.length,
+      bookCount: game.books.length,
+      sortTime: Date.parse(game.scheduledAt || "") || Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((a, b) => a.sortTime - b.sortTime || b.topScore - a.topScore);
 }
 
 function buildFeedSummary({ realEventCount, realOpportunityCount, scannedMarkets, bookCount }) {
@@ -966,6 +1193,118 @@ function buildFeedSummary({ realEventCount, realOpportunityCount, scannedMarkets
         : "No provider events are active. Athena is showing deterministic mock markets so the terminal remains usable while API data is unavailable.",
     error: oddsState.error,
   };
+}
+
+function buildBetTrackerSummary(opportunities) {
+  const ledger = [...(intelligenceStore.bet_ledger || [])].sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  const open = ledger.filter((bet) => bet.status !== "Settled");
+  const settled = ledger.filter((bet) => bet.status === "Settled");
+  const wins = settled.filter((bet) => bet.result === "Win").length;
+  const losses = settled.filter((bet) => bet.result === "Loss").length;
+  const pushes = settled.filter((bet) => bet.result === "Push").length;
+  const staked = settled.reduce((sum, bet) => sum + Number(bet.stake || 0), 0);
+  const profitLoss = round(settled.reduce((sum, bet) => sum + Number(bet.profitLoss || 0), 0), 2);
+  const openExposure = round(open.reduce((sum, bet) => sum + Number(bet.stake || 0), 0), 2);
+  const possibleProfit = round(open.reduce((sum, bet) => sum + Number(bet.potentialProfit || 0), 0), 2);
+  const bankroll = Number(intelligenceStore.strategy_settings?.bankroll || DEFAULT_STRATEGY_SETTINGS.bankroll);
+  const roi = staked ? round((profitLoss / staked) * 100, 1) : 0;
+  const winRate = settled.length ? round((wins / settled.length) * 100, 1) : 0;
+  const avgClosingValue = settled.length
+    ? round(settled.reduce((sum, bet) => sum + Number(bet.closingValue || 0), 0) / settled.length, 2)
+    : 0;
+
+  return {
+    mode: "Manual Real Bet Ledger",
+    note: "Log the bets you actually place, then settle them with real outcomes. This becomes Athena's real performance layer until a final-scores/results API is connected.",
+    ledger,
+    open,
+    settled,
+    suggested: opportunities.slice(0, 5).map((item) => ({
+      sourceId: item.id,
+      sourceType: "opportunity",
+      matchup: item.matchup,
+      sport: item.sport,
+      league: item.league,
+      scheduledAt: item.scheduledAt || item.commenceTime || null,
+      startTimeLabel: item.startTimeLabel || "Time TBD",
+      market: item.market,
+      line: item.line,
+      book: item.book,
+      odds: extractAmericanFromLine(item.line) ?? impliedPriceFromProbability(item.marketProbability || 50),
+      stake: round(Math.max(5, Number(item.kelly || 0.5) * 25), 2),
+      modelProbability: item.aiProbability,
+      impliedProbability: item.marketProbability,
+      expectedValue: item.ev,
+      score: item.score,
+      modelTrustScore: item.modelTrustScore,
+      dataQualityScore: item.dataQualityScore,
+      clv: item.clv,
+    })),
+    summary: {
+      totalBets: ledger.length,
+      openBets: open.length,
+      settledBets: settled.length,
+      wins,
+      losses,
+      pushes,
+      winRate,
+      roi,
+      profitLoss,
+      staked: round(staked, 2),
+      openExposure,
+      possibleProfit,
+      bankroll,
+      currentBankroll: round(bankroll + profitLoss, 2),
+      exposurePercent: bankroll ? round((openExposure / bankroll) * 100, 2) : 0,
+      avgClosingValue,
+    },
+    performanceBySport: betPerformanceBy(ledger, "sport"),
+    performanceByMarket: betPerformanceBy(ledger, "market"),
+    equityCurve: buildTrackedBetEquityCurve(settled, bankroll),
+    resultsEngine: {
+      provider: "Manual settlement",
+      connected: false,
+      readyForApi: true,
+      supportedResults: ["Win", "Loss", "Push"],
+      nextUpgrade: "Connect a final scores/results feed to settle logged bets automatically.",
+    },
+  };
+}
+
+function betPerformanceBy(ledger, key) {
+  const settled = ledger.filter((bet) => bet.status === "Settled");
+  const grouped = new Map();
+  for (const bet of settled) {
+    const label = bet[key] || "Unknown";
+    const row = grouped.get(label) || { label, bets: 0, wins: 0, staked: 0, profitLoss: 0 };
+    row.bets += 1;
+    row.wins += bet.result === "Win" ? 1 : 0;
+    row.staked += Number(bet.stake || 0);
+    row.profitLoss += Number(bet.profitLoss || 0);
+    grouped.set(label, row);
+  }
+  return [...grouped.values()].map((row) => ({
+    ...row,
+    winRate: row.bets ? round((row.wins / row.bets) * 100, 1) : 0,
+    roi: row.staked ? round((row.profitLoss / row.staked) * 100, 1) : 0,
+    profitLoss: round(row.profitLoss, 2),
+    staked: round(row.staked, 2),
+  })).sort((a, b) => b.profitLoss - a.profitLoss).slice(0, 8);
+}
+
+function buildTrackedBetEquityCurve(settled, bankroll) {
+  let equity = bankroll;
+  return settled
+    .slice()
+    .sort((a, b) => Date.parse(a.settledAt || a.createdAt || 0) - Date.parse(b.settledAt || b.createdAt || 0))
+    .map((bet, index) => {
+      equity = round(equity + Number(bet.profitLoss || 0), 2);
+      return {
+        label: String(index + 1),
+        equity,
+        profitLoss: Number(bet.profitLoss || 0),
+      };
+    });
 }
 
 function buildIntelligenceUpgradePack({ opportunities, parlays, backtest, parlayBacktest, marketSanity, feed }) {
@@ -1390,6 +1729,17 @@ function opportunitiesFromOddsEvent(event, eventIndex, frameIndex) {
     .filter(Boolean);
 }
 
+function eventStartTime(event = {}) {
+  return event.status?.startsAt
+    || event.startTime
+    || event.start_time
+    || event.commenceTime
+    || event.commence_time
+    || event.scheduledAt
+    || event.gameTime
+    || null;
+}
+
 function sportsGameOddsOpportunity(event, odd, eventIndex, index, frameIndex) {
   const best = bestSportsGameOddsBook(odd);
   const bookPrice = best?.price ?? parseAmerican(odd.bookOdds);
@@ -1422,6 +1772,7 @@ function sportsGameOddsOpportunity(event, odd, eventIndex, index, frameIndex) {
   const marketName = sportsGameOddsMarketName(event, odd);
   const bookName = best ? formatBookmakerName(best.bookmakerID) : "Consensus";
   const alternate = bestSportsGameOddsBook(odd, best?.bookmakerID);
+  const scheduledAt = eventStartTime(event);
 
   return {
     id: `${event.eventID}-${odd.oddID}`,
@@ -1430,6 +1781,8 @@ function sportsGameOddsOpportunity(event, odd, eventIndex, index, frameIndex) {
     league,
     sport,
     matchup: `${away} @ ${home}`,
+    scheduledAt,
+    startTimeLabel: scheduledAt ? shortDateTime(scheduledAt) : "Time TBD",
     market: marketName,
     book: bookName,
     backupBook: alternate ? `${formatBookmakerName(alternate.bookmakerID)} ${formatAmerican(alternate.price)}` : "No close alt",
@@ -1451,7 +1804,7 @@ function sportsGameOddsOpportunity(event, odd, eventIndex, index, frameIndex) {
     opening: Number.isFinite(openPrice) ? formatAmerican(openPrice) : "No open",
     move,
     source: "real-odds",
-    commenceTime: event.status?.startsAt,
+    commenceTime: scheduledAt,
     tags: [
       "SportsGameOdds live odds",
       byBook.length > 3 ? "Multi-book line shop" : "Limited book sample",
@@ -1483,6 +1836,7 @@ function opportunity([away, home, league, sport], index, frameIndex) {
   const volatility = clamp(22 + Math.abs(drift) * 36 + (sport === "Tennis" ? 9 : 0), 14, 78);
   const market = marketForSport(sport, index);
   const line = lineForMarket(market, index, frameIndex, sport, { away, home, league });
+  const scheduledAt = syntheticScheduleTime(league, sport, index);
   const risk = volatility > 58 ? "Elevated" : score > 86 ? "Controlled" : "Balanced";
   const label = score >= 90 ? "Elite Opportunity" : score >= 80 ? "Strong Value" : score >= 68 ? "Medium Edge" : score >= 54 ? "Risky Opportunity" : "Avoid";
 
@@ -1493,6 +1847,8 @@ function opportunity([away, home, league, sport], index, frameIndex) {
     league,
     sport,
     matchup: `${away} @ ${home}`,
+    scheduledAt,
+    startTimeLabel: shortDateTime(scheduledAt),
     market,
     book: books[(index + frameIndex) % books.length],
     backupBook: books[(index + frameIndex + 3) % books.length],
@@ -1542,6 +1898,8 @@ function prop(item, index, frameIndex) {
     player: profile.player,
     team: item.home,
     matchup: item.matchup,
+    scheduledAt: item.scheduledAt || item.commenceTime || null,
+    startTimeLabel: item.startTimeLabel || "Time TBD",
     league: item.league,
     sport: item.sport,
     market: `${profile.stat} ${direction} ${line}`,
@@ -1667,6 +2025,8 @@ function buildIntelligenceSummary(backtest, riskOffice) {
     parlayPredictions: intelligenceStore.parlay_predictions.length,
     backtestResults: intelligenceStore.backtest_results.length,
     bankrollHistory: intelligenceStore.bankroll_history.length,
+    trackedBets: intelligenceStore.bet_ledger.length,
+    settledResults: intelligenceStore.settled_results.length,
     calibrationError,
     calibrationGrade: calibrationError <= 4 ? "Excellent" : calibrationError <= 8 ? "Good" : calibrationError <= 12 ? "Needs tuning" : "Uncalibrated",
     riskStatus: riskOffice.guardrailStatus,
@@ -1677,6 +2037,8 @@ function buildIntelligenceSummary(backtest, riskOffice) {
       { name: "parlay_legs", rows: intelligenceStore.parlay_legs.length, purpose: "leg-level odds and model edge" },
       { name: "backtest_results", rows: intelligenceStore.backtest_results.length, purpose: "paper-settled bet outcomes" },
       { name: "bankroll_history", rows: intelligenceStore.bankroll_history.length, purpose: "portfolio curve and drawdown path" },
+      { name: "bet_ledger", rows: intelligenceStore.bet_ledger.length, purpose: "real bets logged by the user" },
+      { name: "settled_results", rows: intelligenceStore.settled_results.length, purpose: "manual or API-settled real bet outcomes" },
       { name: "strategy_settings", rows: 1, purpose: "risk limits and Kelly parameters" },
     ],
   };
@@ -1696,6 +2058,25 @@ function concentrationLeader(items, key) {
 function marketForSport(sport, index) {
   const rotation = sportMarkets[sport] || markets;
   return rotation[index % rotation.length];
+}
+
+function syntheticScheduleTime(league, sport, index) {
+  const now = new Date();
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + Math.floor(index / 10));
+  const leagueText = String(league || "").toUpperCase();
+  const baseHour = sport === "Baseball" ? 13
+    : sport === "Soccer" ? 14
+      : sport === "Tennis" || sport === "Golf" ? 10
+        : sport === "MMA" ? 21
+          : sport === "Hockey" ? 19
+            : leagueText.includes("NCAA") || leagueText.includes("NCAAF") || leagueText.includes("NCAAB") ? 15
+              : 18;
+  const minute = [0, 10, 30, 45, 20][index % 5];
+  date.setHours(baseHour + (index % 3), minute, 0, 0);
+  if (date.getTime() < now.getTime() - 30 * 60 * 1000) date.setDate(date.getDate() + 1);
+  return date.toISOString();
 }
 
 function lineForMarket(market, index, frameIndex, sport = "Sports", context = {}) {
@@ -2175,6 +2556,12 @@ function shortTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "N/A";
   return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+function shortDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time TBD";
+  return date.toLocaleString("en-US", { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 function signedNumber(value, digits = 0) {

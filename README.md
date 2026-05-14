@@ -13,6 +13,8 @@ What is included:
 - AI assistant answers for bet placement, Kelly sizing, backtest status, model calibration, market movement, and parlay risk.
 - Expanded league coverage for NBA, NFL, MLB, NHL, college football, college basketball, WNBA, major soccer, tennis, UFC, and PGA-style markets.
 - Feed diagnostics showing real/fallback mode, enabled leagues, refresh interval, next retry, quota values, events, books, and market count.
+- Real Results + Bet Tracker Engine for logging actual bets, settling win/loss/push results, calculating real ROI/P&L, tracking open exposure, and comparing performance by sport/market.
+- Game Schedule Board with start times across the opportunity feed, bet detail tickets, parlay legs, and tracked bet suggestions.
 
 Run locally:
 
@@ -53,3 +55,12 @@ ODDS_RATE_LIMIT_BACKOFF_MS=1800000
 Those settings scan more sports but only refresh every 5 minutes, with a 30-minute cooldown after a `429` rate-limit response.
 
 Runtime data is saved locally at `data/athena-intelligence-store.json`. That file is intentionally ignored for GitHub uploads because it can contain private betting history.
+
+Bet tracking:
+
+- Open the Portfolio workspace.
+- Use Suggested From Board to track one of Athena's current picks, or Log Custom Bet for an outside bet.
+- After the game is final, settle the bet as Win, Loss, or Push.
+- The tracker updates real win rate, ROI, profit/loss, open exposure, current bankroll, and sport/market performance.
+
+This first results engine uses manual settlement. To make it fully automatic, connect a final scores/results API and map settled outcomes into `bet_ledger` and `settled_results`.
