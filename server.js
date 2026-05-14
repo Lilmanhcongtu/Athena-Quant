@@ -151,7 +151,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-06"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-07"></script>
   </body>
 </html>`;
 
@@ -1092,6 +1092,7 @@ function prop(item, index, frameIndex) {
     id: `${item.id}-prop`,
     player: profile.player,
     team: item.home,
+    matchup: item.matchup,
     league: item.league,
     sport: item.sport,
     market: `${profile.stat} ${direction} ${line}`,
