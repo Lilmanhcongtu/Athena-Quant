@@ -69,6 +69,17 @@ test("parlay generator creates scored predictions with leg explanations", () => 
   assert.match(parlays[0].legs[0].explanation, /model probability|grades as/);
 });
 
+test("50 percent hit rate mode creates safer two-leg parlays", () => {
+  const parlays = generateParlayPredictions({ opportunities, props, frameIndex: 6 });
+  const hitMode = parlays.find((parlay) => parlay.type === "hit-rate-50");
+  assert.ok(hitMode);
+  assert.equal(hitMode.legs.length, 2);
+  assert.ok(hitMode.targetHitRateMode.enabled);
+  assert.ok(hitMode.hitProbability >= 50);
+  assert.ok(hitMode.legs.every((leg) => leg.targetHitRateLeg && leg.modelProbability >= 72));
+  assert.match(hitMode.invalidationRules.join(" "), /50% Hit Rate Mode/);
+});
+
 test("backtest result calculation returns bankroll and performance metrics", () => {
   const parlays = generateParlayPredictions({ opportunities, props, frameIndex: 2 });
   const backtest = buildParlayBacktest({ parlays, opportunities, props, frameIndex: 2 });

@@ -16,6 +16,7 @@ What is included:
 - Real Results + Bet Tracker Engine for logging actual bets, settling win/loss/push results, calculating real ROI/P&L, tracking open exposure, and comparing performance by sport/market.
 - Game Schedule Board with start times across the opportunity feed, bet detail tickets, parlay legs, and tracked bet suggestions.
 - Superhuman Intelligence Layer with sport-specific model profiles, book sharpness weighting, injury/lineup/weather context risk, price discipline, "price is gone" refusal logic, model grading, alert intelligence, and cloud-readiness diagnostics.
+- 50% Hit Rate Mode for parlays, which builds safer two-leg alt-line tickets with 72%+ leg probability targets, strict confidence/data/context rules, weakest-leg checks, and lower payout expectations.
 
 Run locally:
 
@@ -74,3 +75,11 @@ Intelligence upgrade notes:
 - Real Model Grading tracks Brier score, log loss, calibration error, and confidence buckets from the available historical sample.
 - Historical Odds Warehouse stores local pre-game snapshots for CLV, no-lookahead backtests, and future model learning.
 - For a true live production version, add cloud user accounts, a cloud database, encrypted API-key storage, final-score settlement feeds, and background odds workers.
+
+Parlay win-rate mode:
+
+- Open the Parlays workspace and select `50% Hit Rate Mode`.
+- This mode is designed for safer two-leg tickets, not large payouts.
+- Athena requires 72%+ target model probability per leg, 78+ confidence, 80+ data quality, context risk below 55, no `Price gone` legs, and weakest leg score 70+.
+- Use the safer alternate-line version shown in the ticket. If you use the original higher-payout line, the mode no longer applies.
+- This is still model-projected probability, not a guaranteed win rate. Settled real results are needed to prove whether the mode is truly reaching 50% over time.

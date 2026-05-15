@@ -909,6 +909,7 @@ function ParlayBuilderWorkspace({ snapshot }) {
   const controlled = parlays.filter((item) => item.riskLevel === "Controlled").length;
   const avgScore = average(parlays, (item) => item.parlayScore || 0);
   const avgEv = average(parlays, (item) => item.expectedValue || 0);
+  const hitRateMode = parlays.find((item) => item.targetHitRateMode?.enabled);
 
   return (
     <div className="space-y-3 p-3">
@@ -918,11 +919,12 @@ function ParlayBuilderWorkspace({ snapshot }) {
         subtitle="Professional parlay generator across spreads, totals, moneylines, player props, same-game logic, and mixed-sport baskets."
         stat={`${parlays.length} ranked parlays`}
       />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <ScannerMetric label="Top Score" value={top?.parlayScore || 0} sub={top?.label || "waiting for engine"} icon={BrainCircuit} />
         <ScannerMetric label="Avg EV" value={`${signed(avgEv)}%`} sub="parlay-level expected value" icon={TrendingUp} />
         <ScannerMetric label="Controlled Risk" value={controlled} sub="risk score below threshold" icon={ShieldCheck} />
         <ScannerMetric label="Best Payout" value={top ? dollars.format(top.projectedPayout) : "$0"} sub="projected return incl. stake" icon={CircleDollarSign} />
+        <ScannerMetric label="50% Mode" value={hitRateMode ? percent(hitRateMode.hitProbability || 0, 0) : "Off"} sub={hitRateMode?.targetHitRateMode?.mode || "needs 2 safe legs"} icon={Target} />
       </div>
       <div className="grid gap-3 2xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
         <Panel icon={BadgeDollarSign} title="AI Ranked Parlay Board" action={<span className="status-pill mono text-[10px]">Correlation Guard Active</span>}>
@@ -956,6 +958,7 @@ function ParlayPredictionCard({ parlay, selected, onSelect }) {
             <span className="mono text-[10px] text-cyan-200">#{parlay.rank}</span>
             <span className="truncate text-sm font-black text-white">{parlay.label}</span>
             <span className="status-pill mono text-[10px]">{parlay.style}</span>
+            {parlay.targetHitRateMode?.enabled ? <span className="status-pill mono text-[10px]">50% hit mode</span> : null}
             {parlay.ticketLockStatus ? <span className="status-pill mono text-[10px]">{parlay.ticketLockStatus}</span> : null}
           </div>
           <div className="mt-1 truncate text-xs text-slate-400">{parlay.legs.map((leg) => leg.game).slice(0, 2).join(" | ")}</div>
@@ -1032,6 +1035,8 @@ function ParlayDetailPanel({ parlay }) {
           <div className="text-sm leading-6 text-slate-200">{parlay.reasoning}</div>
         </div>
 
+        {parlay.targetHitRateMode?.enabled ? <FiftyHitRateModePanel parlay={parlay} /> : null}
+
         <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3">
           <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-amber-200">
             <ShieldCheck size={13} />
@@ -1076,6 +1081,42 @@ function ParlayDetailPanel({ parlay }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+function FiftyHitRateModePanel({ parlay }) {
+  const mode = parlay.targetHitRateMode || {};
+  const tone = mode.qualified ? "text-mint" : "text-amber-200";
+  return (
+    <div className="mt-3 rounded-lg border border-mint/20 bg-mint/[0.055] p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-mint">
+          <Target size={13} />
+          50% Hit Rate Mode
+        </div>
+        <span className={`status-pill mono text-[10px] ${tone}`}>{mode.mode || "Watch only"}</span>
+      </div>
+      <div className="text-sm leading-6 text-slate-200">{mode.explanation || mode.summary}</div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <PriceCard label="Target hit" value={`${mode.targetHitRate || 50}%`} sub={`model says ${percent(parlay.hitProbability || 0)}`} />
+        <PriceCard label="Leg target" value={`${mode.legTargetProbability || 72}%+`} sub="per leg model probability" />
+        <PriceCard label="Weakest leg min" value={`${mode.minWeakestLegScore || 70}/100`} sub={`current ${parlay.weakestLegScore || 0}/100`} />
+        <PriceCard label="Target payout" value={mode.targetOddsRange || "+100 to +180"} sub={`current ${formatAmericanOdds(parlay.americanOdds)}`} />
+      </div>
+      {mode.blockers?.length ? (
+        <div className="mt-3 grid gap-2">
+          {mode.blockers.slice(0, 3).map((blocker) => (
+            <div key={blocker} className="rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-xs leading-5 text-amber-100">
+              {blocker}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+          Qualified: exactly 2 safer-alt legs, no price-gone legs, clean context risk, and weakest leg stays above the 70/100 cutoff.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1156,6 +1197,7 @@ function ParlayLegTable({ legs, weakestLegId }) {
           <div className="min-w-0">
             <div className="truncate font-bold text-slate-100">{legBetText(leg)}</div>
             <div className="mt-1 truncate text-[11px] text-slate-500">{leg.marketType}</div>
+            {leg.targetHitRateLeg ? <div className="mt-1 truncate text-[10px] text-mint">Safer alt-line target | original: {leg.originalBetText}</div> : null}
           </div>
           <div className="min-w-0">
             <div className="truncate text-slate-200">{leg.sportsbook}</div>
@@ -3704,6 +3746,9 @@ function legBetText(leg) {
 }
 
 function legPlacementRule(leg) {
+  if (leg.targetHitRateLeg) {
+    return leg.altLineInstruction || `Use the safer alternate line at ${formatAmericanOdds(leg.minimumAcceptableOdds ?? leg.odds)} or better.`;
+  }
   const price = formatAmericanOdds(leg.minimumAcceptableOdds ?? leg.odds);
   const edge = Number(leg.edge || 0);
   const confidence = Number(leg.confidence || 0);
@@ -3714,12 +3759,23 @@ function legPlacementRule(leg) {
 
 function buildParlayPlacementSteps(parlay) {
   const primaryBook = parlay.legs[0]?.sportsbook || "your sportsbook";
-  return [
+  const baseSteps = [
     `Open ${primaryBook} or a sportsbook where you can add all listed legs to one parlay slip.`,
-    ...parlay.legs.map((leg, index) => `Leg ${index + 1}: ${leg.game} | ${legBetText(leg)} | ${leg.sportsbook} | take ${formatAmericanOdds(leg.odds)} or better.`),
+    ...parlay.legs.map((leg, index) => {
+      const alt = leg.targetHitRateLeg ? " | safer alt-line required" : "";
+      return `Leg ${index + 1}: ${leg.game} | ${legBetText(leg)} | ${leg.sportsbook} | take ${formatAmericanOdds(leg.odds)} or better${alt}.`;
+    }),
     `Set stake around ${dollars.format(parlay.recommendedStake || 0)}. Target payout is ${dollars.format(parlay.projectedPayout || 0)} including stake.`,
     `Before submitting, confirm the final parlay price is near ${formatAmericanOdds(parlay.americanOdds)} and no leg has moved worse by more than 10 cents.`,
   ];
+  if (parlay.targetHitRateMode?.enabled) {
+    return [
+      "Use 50% Hit Rate Mode only as a safer-alt parlay. Do not use the original higher-payout versions of the legs.",
+      ...baseSteps,
+      "If the final slip is not near +100 to +180, or hit probability drops below 50%, skip it.",
+    ];
+  }
+  return baseSteps;
 }
 
 function extractDisplayOdds(value = "") {
@@ -3814,8 +3870,14 @@ function buildAssistantAnswer(input, opportunity, snapshot) {
     return `${opportunity.matchup} shows ${opportunity.sharp}% sharp money against ${opportunity.publicMoney}% public exposure. The line moved ${signed(opportunity.move)} from an opener of ${opportunity.opening}. Athena has ${opportunity.marketMemory?.captures || 0} local captures on this market, and the current memory says: ${opportunity.marketMemory?.summary || "no stored movement yet"}.`;
   }
   if (q.includes("parlay") || q.includes("correl")) {
-    const parlay = snapshot.parlays?.[0];
+    const wantsHitRate = q.includes("50") || q.includes("winrate") || q.includes("win rate") || q.includes("safer") || q.includes("safe");
+    const hitMode = (snapshot.parlays || []).find((item) => item.targetHitRateMode?.enabled);
+    const parlay = wantsHitRate && hitMode ? hitMode : snapshot.parlays?.[0];
     if (parlay) {
+      if (parlay.targetHitRateMode?.enabled) {
+        const mode = parlay.targetHitRateMode;
+        return `${parlay.label}: use this only as a 2-leg safer-alt parlay. Athena projects ${percent(parlay.hitProbability)} hit probability, target odds ${mode.targetOddsRange}, and status ${mode.mode}. Place the safer alternate version of each leg around the listed odds; skip it if any leg drops below ${mode.legTargetProbability}% model probability, confidence below ${mode.minConfidence}, context risk above ${mode.maxContextRisk}, or weakest leg below ${mode.minWeakestLegScore}/100.`;
+      }
       return `${parlay.label} is the top parlay right now with score ${parlay.parlayScore}, odds ${formatAmericanOdds(parlay.americanOdds)}, hit probability ${percent(parlay.hitProbability)}, and EV ${signed(parlay.expectedValue)}%. Main warning: ${parlay.correlationWarning}`;
     }
     return `I would only correlate this with markets that share the same game script. The cleanest pairing is ${opportunity.market} plus a pace-sensitive prop, because the model edge is driven by ${lowerText(opportunity.tags?.[2], "model divergence")} and CLV runway.`;
