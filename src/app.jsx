@@ -436,6 +436,7 @@ function IntelligenceBrainWorkspace({ snapshot, selected, setSelectedId }) {
         </Panel>
       </div>
       <IntelligenceUpgradePanel snapshot={snapshot} />
+      <ProductionUpgradePanel snapshot={snapshot} />
       <div className="grid gap-3 xl:grid-cols-3">
         <BrainChecklist title="Next Best Actions" items={brain.nextActions} icon={Sparkles} />
         <BrainChecklist title="Risk Blocks" items={brain.riskBlocks} icon={ShieldCheck} />
@@ -620,6 +621,170 @@ function IntelligenceDiagnosticPanel({ icon: Icon, title, rows, note, tone }) {
       </div>
       <div className="mt-3 text-xs leading-5 text-slate-400">{note}</div>
     </div>
+  );
+}
+
+function ProductionUpgradePanel({ snapshot, compact = false }) {
+  const prod = snapshot.productionUpgrade || {};
+  if (!prod.modules?.length) return null;
+  const settlement = prod.settlement || {};
+  const worker = prod.worker || {};
+  const slip = prod.mobileBetSlip || {};
+  const proof = prod.parlayProof || {};
+  const bankroll = prod.bankrollBrain || {};
+  const sportEngines = prod.sportEngines || {};
+  return (
+    <Panel icon={Cable} title="Production Upgrade Engine" action={<span className="status-pill mono text-[10px]">{prod.readinessScore || 0}/100 readiness</span>}>
+      <div className="grid gap-3 p-3">
+        <div className={`grid gap-2 ${compact ? "grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-5"}`}>
+          {(prod.modules || []).slice(0, compact ? 4 : 10).map((module) => (
+            <div key={module.name} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{module.name}</span>
+                <span className={module.score >= 75 ? "text-mint" : module.score >= 55 ? "text-amber-200" : "text-red-300"}>{module.score}</span>
+              </div>
+              <div className="mt-2 text-sm font-black text-white">{module.status}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{module.nextAction}</div>
+            </div>
+          ))}
+        </div>
+
+        {!compact ? (
+          <div className="grid gap-3 xl:grid-cols-3">
+            <IntelligenceDiagnosticPanel
+              icon={AlarmClock}
+              title="Auto-Settlement Engine"
+              tone="text-cyan-200"
+              rows={[
+                ["Provider", settlement.provider || "Manual settlement"],
+                ["Pending settlement", settlement.pendingSettlement || 0],
+                ["Settled real bets", settlement.settledBets || 0],
+                ["Status", settlement.status || "Manual mode"],
+              ]}
+              note={settlement.note || "Connect a final scores/results feed so Athena can grade bets automatically."}
+            />
+            <IntelligenceDiagnosticPanel
+              icon={RefreshCw}
+              title="Worker Engine"
+              tone="text-amber-200"
+              rows={[
+                ["Mode", worker.status || "Inline server loop"],
+                ["Refresh", formatDuration(worker.refreshMs || snapshot.feed?.refreshMs)],
+                ["Cooldown", worker.cooldown ? "Active" : "Clear"],
+                ["Next pull", formatTimestamp(worker.nextFetchAt || snapshot.feed?.nextFetchAt)],
+              ]}
+              note={worker.note || "Move odds fetching and model scoring into background jobs for production."}
+            />
+            <IntelligenceDiagnosticPanel
+              icon={ShieldCheck}
+              title="Personal Bankroll Brain"
+              tone="text-mint"
+              rows={[
+                ["Risk style", bankroll.riskStyle || "Balanced"],
+                ["Open exposure", dollars.format(bankroll.openExposure || 0)],
+                ["Exposure", `${bankroll.exposurePercent || 0}%`],
+                ["Decision", bankroll.status || "Review"],
+              ]}
+              note={bankroll.nextAction || "Athena should block oversized bets and avoid chasing losses."}
+            />
+          </div>
+        ) : null}
+
+        {!compact ? (
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <MobileBetSlipPanel slip={slip} />
+            <ParlayProofPanel proof={proof} />
+          </div>
+        ) : null}
+
+        {!compact ? (
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.55fr)]">
+            <Panel icon={BrainCircuit} title="Sport-Specific Model Coverage" action={<span className="status-pill mono text-[10px]">{sportEngines.status || "coverage"}</span>}>
+              <div className="grid gap-2 p-3 md:grid-cols-2">
+                {(sportEngines.engines || []).slice(0, 8).map((engine) => (
+                  <div key={engine.sport} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-white">{engine.sport}</div>
+                        <div className="mt-1 truncate text-[11px] text-slate-500">{engine.engine}</div>
+                      </div>
+                      <div className="mono text-cyan-200">{engine.activeMarkets}</div>
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-slate-400">{(engine.factors || []).slice(0, 4).join(", ")}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+            <Panel icon={Sparkles} title="Next Build Order">
+              <div className="grid gap-2 p-3">
+                {(prod.nextBuildOrder || []).slice(0, 5).map((item, index) => (
+                  <div key={item} className="flex gap-3 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-slate-300">
+                    <span className="mono text-cyan-200">{index + 1}</span>
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </div>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+function MobileBetSlipPanel({ slip }) {
+  const primary = slip?.primary;
+  const parlay = slip?.parlay;
+  return (
+    <Panel icon={BadgeDollarSign} title="Mobile Bet Slip Mode" action={<span className="status-pill mono text-[10px]">{slip?.status || "No slip"}</span>}>
+      <div className="grid gap-3 p-3">
+        {[primary, parlay].filter(Boolean).map((ticket) => (
+          <div key={`${ticket.type}-${ticket.exactBet}`} className="rounded-lg border border-mint/20 bg-mint/[0.055] p-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-mint">{ticket.type}</div>
+            <div className="mt-2 text-sm font-black text-white">{ticket.exactBet}</div>
+            <div className="mt-1 text-xs text-slate-400">{ticket.matchup}</div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <MiniDecisionRow label="Sportsbook" value={ticket.sportsbook || "Best available"} />
+              <MiniDecisionRow label="Odds" value={displayOddsOrText(ticket.odds)} />
+              <MiniDecisionRow label="Max stake" value={ticket.maxStake || "Small"} />
+              <MiniDecisionRow label="Do not take worse" value={displayOddsOrText(ticket.doNotTakeWorseThan)} />
+            </div>
+            <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">{ticket.reason}</div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function ParlayProofPanel({ proof }) {
+  const legRows = proof?.byLegCount || [];
+  const weakest = proof?.byWeakestLeg || [];
+  return (
+    <Panel icon={BarChart3} title="Real Parlay Proof" action={<span className="status-pill mono text-[10px]">{proof?.status || "Waiting"}</span>}>
+      <div className="grid gap-3 p-3">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <AnalyticsBox label="Proof Results" value={proof?.totalResults || 0} sub="paper or real sample" />
+          <AnalyticsBox label="Best Legs" value={legRows[0]?.label || "N/A"} sub={`${percent(legRows[0]?.winRate || 0)} win rate`} />
+          <AnalyticsBox label="Proof Score" value={`${proof?.score || 0}/100`} sub={proof?.nextAction || "needs settled parlays"} />
+        </div>
+        <div className="grid gap-2">
+          {legRows.slice(0, 4).map((row) => (
+            <div key={row.label} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-xs">
+              <span className="text-slate-300">{row.label} legs</span>
+              <span className="mono text-cyan-200">{percent(row.winRate || 0)} | ROI {percent(row.roi || 0)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-2">
+          {weakest.slice(0, 3).map((row) => (
+            <div key={row.label} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-slate-300">
+              <span className="font-bold text-white">{row.label}</span> | weakest {row.weakestLegScore}/100 | hit {percent(row.hitProbability || 0)} | {row.status}
+            </div>
+          ))}
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -3732,6 +3897,12 @@ function formatAmericanOdds(value) {
   return number > 0 ? `+${Math.round(number)}` : `${Math.round(number)}`;
 }
 
+function displayOddsOrText(value) {
+  const number = Number(value);
+  if (Number.isFinite(number)) return formatAmericanOdds(number);
+  return String(value || "N/A");
+}
+
 function impliedPercentFromAmerican(value) {
   const number = Number(value);
   if (!Number.isFinite(number) || number === 0) return 0;
@@ -3891,6 +4062,11 @@ function buildAssistantAnswer(input, opportunity, snapshot) {
     const warehouse = snapshot.intelligenceUpgrade?.warehouse || {};
     const cloud = snapshot.intelligenceUpgrade?.cloudReadiness || {};
     return `Warehouse status: ${warehouse.status || "Capturing"} with ${warehouse.oddsSnapshots || 0} odds snapshots and ${warehouse.lineMoveRows || 0} line movement rows. Cloud readiness is ${cloud.status || "Local mode"}; the production jump is user accounts, a cloud database, secure API-key storage, and background odds workers.`;
+  }
+  if (q.includes("develop") || q.includes("better") || q.includes("production") || q.includes("upgrade")) {
+    const production = snapshot.productionUpgrade || {};
+    const next = production.nextBuildOrder?.[0] || "connect final results and cloud database";
+    return `Production readiness is ${production.readinessScore || 0}/100: ${production.status || "prototype"}. Next best build is ${next}. Auto-settlement is ${production.settlement?.status || "manual"}, warehouse is ${production.warehouse?.status || "local"}, worker engine is ${production.worker?.status || "inline"}, and parlay proof is ${production.parlayProof?.status || "waiting for results"}.`;
   }
   if (q.includes("calibrat") || q.includes("trust") || q.includes("accur")) {
     const intel = snapshot.intelligence || {};

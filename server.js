@@ -239,7 +239,7 @@ const html = `<!doctype html>
     <div id="root"></div>
     <script type="application/json" id="initial-snapshot">${JSON.stringify(buildSnapshot(0)).replace(/</g, "\\u003c")}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-11"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="/src/app.jsx?v=20260514-12"></script>
   </body>
 </html>`;
 
@@ -1194,6 +1194,19 @@ function buildSnapshot(frameIndex) {
     marketSanity,
     feed,
   });
+  const productionUpgrade = buildProductionUpgradeEngine({
+    opportunities,
+    parlays,
+    backtest,
+    parlayBacktest,
+    riskOffice,
+    intelligence,
+    betTracker,
+    intelligenceUpgrade,
+    feed,
+    marketSanity,
+    schedule,
+  });
 
   return {
     generatedAt: now.toISOString(),
@@ -1223,6 +1236,7 @@ function buildSnapshot(frameIndex) {
     riskOffice,
     intelligence,
     intelligenceUpgrade,
+    productionUpgrade,
     betTracker,
     marketSanity,
     parlays,
@@ -1736,14 +1750,362 @@ function buildAlertIntelligence(opportunities, parlays) {
 }
 
 function buildCloudReadinessSummary() {
-  const missing = ["User authentication", "Cloud Postgres/Supabase", "Encrypted API key vault", "Background worker", "Final-results provider"];
+  const hasDatabase = Boolean(process.env.DATABASE_URL || process.env.SUPABASE_URL);
+  const hasAuth = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY);
+  const hasSecretVault = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.RENDER || process.env.FLY_APP_NAME);
+  const hasWorker = process.env.ATHENA_WORKER_MODE === "background" || process.env.ODDS_WORKER_ENABLED === "true";
+  const hasResultsProvider = Boolean(process.env.RESULTS_API_KEY || process.env.SCORES_API_KEY);
+  const checks = [
+    ["User authentication", hasAuth],
+    ["Cloud Postgres/Supabase", hasDatabase],
+    ["Encrypted API key vault", hasSecretVault],
+    ["Background worker", hasWorker],
+    ["Final-results provider", hasResultsProvider],
+  ];
+  const missing = checks.filter(([, ready]) => !ready).map(([label]) => label);
+  const readyCount = checks.length - missing.length;
   return {
-    status: "Local-first",
-    readyForCloud: false,
+    status: missing.length ? "Local-first" : "Cloud-ready",
+    readyForCloud: missing.length === 0,
+    readyCount,
+    totalChecks: checks.length,
     missing,
+    checks: checks.map(([label, ready]) => ({ label, ready })),
     nextStack: "Supabase Auth + Postgres + Render worker + hosted secrets",
     note: "Local data works now; production accounts require auth, per-user ledgers, encrypted secrets, and worker jobs.",
   };
+}
+
+function buildProductionUpgradeEngine({
+  opportunities,
+  parlays,
+  backtest,
+  parlayBacktest,
+  riskOffice,
+  intelligence,
+  betTracker,
+  intelligenceUpgrade,
+  feed,
+  marketSanity,
+  schedule,
+}) {
+  const settlement = buildAutoSettlementReadiness(betTracker);
+  const warehouse = buildProductionWarehouseStatus(intelligenceUpgrade.warehouse, feed);
+  const cloud = intelligenceUpgrade.cloudReadiness || buildCloudReadinessSummary();
+  const worker = buildWorkerEngineStatus(feed);
+  const sportEngines = buildSportEngineCoverage(opportunities);
+  const modelGrading = buildProductionModelGrading(backtest, opportunities, betTracker);
+  const alerts = buildProductionAlerts({ opportunities, parlays, riskOffice, intelligenceUpgrade, betTracker, marketSanity });
+  const bankrollBrain = buildPersonalizedBankrollBrain(riskOffice, betTracker);
+  const mobileBetSlip = buildMobileBetSlip(opportunities, parlays);
+  const parlayProof = buildRealParlayProof(parlays, parlayBacktest);
+  const modules = [
+    buildProductionModule("Auto-Settlement", settlement.status, settlement.score, settlement.nextAction),
+    buildProductionModule("Odds Warehouse", warehouse.status, warehouse.score, warehouse.nextAction),
+    buildProductionModule("Cloud Accounts", cloud.status, Math.round((cloud.readyCount || 0) / Math.max(1, cloud.totalChecks || 5) * 100), cloud.missing?.[0] || "Ready for cloud data"),
+    buildProductionModule("Worker Engine", worker.status, worker.score, worker.nextAction),
+    buildProductionModule("Sport Models", sportEngines.status, sportEngines.score, sportEngines.nextAction),
+    buildProductionModule("Model Grading", modelGrading.status, modelGrading.score, modelGrading.nextAction),
+    buildProductionModule("Smart Alerts", alerts.status, alerts.score, alerts.nextAction),
+    buildProductionModule("Bankroll Brain", bankrollBrain.status, bankrollBrain.score, bankrollBrain.nextAction),
+    buildProductionModule("Mobile Slip", mobileBetSlip.status, mobileBetSlip.score, mobileBetSlip.nextAction),
+    buildProductionModule("Parlay Proof", parlayProof.status, parlayProof.score, parlayProof.nextAction),
+  ];
+  const readinessScore = Math.round(modules.reduce((sum, item) => sum + item.score, 0) / modules.length);
+  return {
+    createdAt: new Date().toISOString(),
+    readinessScore,
+    status: readinessScore >= 82 ? "Production path strong" : readinessScore >= 62 ? "Buildable prototype" : "Needs core data",
+    modules,
+    settlement,
+    warehouse,
+    cloud,
+    worker,
+    sportEngines,
+    modelGrading,
+    alerts,
+    bankrollBrain,
+    mobileBetSlip,
+    parlayProof,
+    nextBuildOrder: [
+      settlement.connected ? "Scale auto-settlement to every market" : "Connect final scores/results provider",
+      warehouse.cloudReady ? "Backfill historical odds by sport" : "Move odds warehouse into cloud Postgres",
+      cloud.readyForCloud ? "Add per-user model preferences" : "Add Supabase Auth, Postgres, and hosted secrets",
+      worker.backgroundEnabled ? "Shard workers by sport" : "Move odds fetching/scoring into a background worker",
+      "Keep proving parlay hit rate with settled real tickets",
+    ],
+    note: "This layer turns the roadmap into measurable production gates so Athena knows which intelligence systems are real, local-only, or still waiting on external data.",
+  };
+}
+
+function buildProductionModule(name, status, score, nextAction) {
+  return { name, status, score: Math.round(clamp(score, 0, 100)), nextAction };
+}
+
+function buildAutoSettlementReadiness(betTracker) {
+  const engine = betTracker.resultsEngine || {};
+  const hasProvider = Boolean(process.env.RESULTS_API_KEY || process.env.SCORES_API_KEY);
+  const pending = Number(engine.pendingSettlement || 0);
+  const settled = Number(betTracker.summary?.settledBets || 0);
+  const score = Math.round(clamp((hasProvider ? 82 : 38) + Math.min(18, settled * 3) - Math.min(14, pending * 4), 0, 100));
+  return {
+    connected: hasProvider,
+    provider: hasProvider ? "Results API configured" : engine.provider || "Manual settlement",
+    status: hasProvider ? "API-ready" : pending ? "Needs results feed" : "Manual mode",
+    score,
+    pendingSettlement: pending,
+    settledBets: settled,
+    openWithStartTimes: engine.openWithStartTimes || 0,
+    supportedResults: engine.supportedResults || ["Win", "Loss", "Push"],
+    nextAction: hasProvider ? "Map final scores into bet_ledger outcomes" : "Add RESULTS_API_KEY or SCORES_API_KEY and market outcome mapping",
+    note: hasProvider
+      ? "Athena can be wired to auto-grade logged bets once score/result mapping is implemented."
+      : "Manual settlement is working, but true win rate and ROI need a final-results provider.",
+  };
+}
+
+function buildProductionWarehouseStatus(warehouse, feed) {
+  const hasCloudDb = Boolean(process.env.DATABASE_URL || process.env.SUPABASE_URL);
+  const snapshots = Number(warehouse?.oddsSnapshots || 0);
+  const lineMoves = Number(warehouse?.lineMoveRows || 0);
+  const score = Math.round(clamp((snapshots / 1400) * 50 + (lineMoves / 2800) * 30 + (hasCloudDb ? 20 : 0), 20, 100));
+  return {
+    status: hasCloudDb ? "Cloud target configured" : snapshots >= 1000 ? "Local warehouse active" : "Warming up",
+    score,
+    oddsSnapshots: snapshots,
+    lineMoveRows: lineMoves,
+    uniqueMarkets: warehouse?.uniqueMarkets || 0,
+    cloudReady: hasCloudDb,
+    feedMode: feed.mode,
+    nextAction: hasCloudDb ? "Persist raw book-by-book odds in database tables" : "Set DATABASE_URL or SUPABASE_URL and migrate local JSON tables",
+    note: warehouse?.note || "Athena stores pre-entry snapshots for CLV, no-lookahead backtests, and model learning.",
+  };
+}
+
+function buildWorkerEngineStatus(feed) {
+  const backgroundEnabled = process.env.ATHENA_WORKER_MODE === "background" || process.env.ODDS_WORKER_ENABLED === "true";
+  const cooldown = Boolean(feed.rateLimitResetAt);
+  const score = Math.round(clamp((backgroundEnabled ? 82 : 45) + (feed.mode === "real" ? 12 : 0) - (cooldown ? 10 : 0), 0, 100));
+  return {
+    backgroundEnabled,
+    status: backgroundEnabled ? "Background mode" : "Inline server loop",
+    score,
+    refreshMs: feed.refreshMs,
+    nextFetchAt: feed.nextFetchAt,
+    cooldown,
+    provider: feed.provider,
+    nextAction: backgroundEnabled ? "Shard workers by sport and cache scored opportunities" : "Create hosted worker that fetches odds, scores markets, and writes snapshots",
+    note: "Production Athena should have workers score markets in the background while the dashboard reads cached results.",
+  };
+}
+
+function buildSportEngineCoverage(opportunities) {
+  const bySport = Object.entries(sportModelProfiles).map(([sport, profile]) => {
+    const active = opportunities.filter((item) => item.sport === sport);
+    const avgConfidence = active.length ? round(active.reduce((sum, item) => sum + Number(item.sportModel?.confidence || item.confidence || 0), 0) / active.length, 1) : 0;
+    return {
+      sport,
+      engine: profile.engine,
+      activeMarkets: active.length,
+      avgConfidence,
+      factors: profile.factors,
+      status: active.length ? "Active" : "No current games",
+    };
+  });
+  const activeCount = bySport.filter((item) => item.activeMarkets).length;
+  return {
+    status: `${activeCount}/${bySport.length} active`,
+    score: Math.round((activeCount / bySport.length) * 100),
+    activeCount,
+    totalEngines: bySport.length,
+    engines: bySport,
+    nextAction: "Replace profile scoring with sport-specific feature feeds and trained model coefficients",
+  };
+}
+
+function buildProductionModelGrading(backtest, opportunities, betTracker) {
+  const settled = betTracker.settled || [];
+  const grading = buildRealModelGrading(backtest, opportunities);
+  const bySport = aggregateModelBoard(opportunities, "sport");
+  const byMarket = aggregateModelBoard(opportunities, "market");
+  const score = Math.round(clamp((100 - Number(grading.calibrationError || 0) * 4) * 0.45 + Math.min(100, Number(grading.sampleSize || 0) / 360 * 100) * 0.35 + Math.min(100, settled.length * 8) * 0.2, 0, 100));
+  return {
+    status: settled.length ? "Real results included" : "Paper sample only",
+    score,
+    brier: grading.brier,
+    logLoss: grading.logLoss,
+    calibrationError: grading.calibrationError,
+    sampleSize: grading.sampleSize,
+    settledRealBets: settled.length,
+    confidenceBuckets: grading.confidenceBuckets,
+    bySport,
+    byMarket,
+    nextAction: settled.length ? "Expand settled sample by sport and market" : "Auto-settle real bets to replace paper outcomes",
+    note: "Brier score and log loss tell Athena when confidence is honest, not just impressive-looking.",
+  };
+}
+
+function aggregateModelBoard(items, key) {
+  const grouped = new Map();
+  for (const item of items) {
+    const label = item[key] || "Unknown";
+    const row = grouped.get(label) || { label, count: 0, avgEv: 0, avgClv: 0, avgScore: 0 };
+    row.count += 1;
+    row.avgEv += Number(item.ev || 0);
+    row.avgClv += Number(item.clv || 0);
+    row.avgScore += Number(item.score || 0);
+    grouped.set(label, row);
+  }
+  return [...grouped.values()].map((row) => ({
+    label: row.label,
+    count: row.count,
+    avgEv: round(row.avgEv / row.count, 1),
+    avgClv: round(row.avgClv / row.count, 1),
+    avgScore: Math.round(row.avgScore / row.count),
+  })).sort((a, b) => b.avgScore - a.avgScore).slice(0, 6);
+}
+
+function buildProductionAlerts({ opportunities, parlays, riskOffice, intelligenceUpgrade, betTracker, marketSanity }) {
+  const alerts = [];
+  for (const alert of intelligenceUpgrade.alertIntelligence?.alerts || []) {
+    alerts.push({ ...alert, source: "Market brain" });
+  }
+  const pending = betTracker.resultsEngine?.pendingSettlement || 0;
+  if (pending) alerts.push({ id: "settlement-pending", type: "Bets need settlement", severity: "High", action: "Settle results", matchup: `${pending} bets`, market: "Portfolio", source: "Results" });
+  if (riskOffice.guardrailStatus === "Review") alerts.push({ id: "risk-review", type: "Risk office review", severity: "High", action: "Reduce exposure", matchup: "Portfolio", market: "Bankroll", source: "Risk" });
+  const invalid = Number(marketSanity.invalidOpportunities?.length || 0) + Number(marketSanity.invalidProps?.length || 0) + Number(marketSanity.invalidParlayLegs?.length || 0);
+  if (invalid) alerts.push({ id: "market-sanity", type: "Bad market data detected", severity: "Critical", action: "Block invalid rows", matchup: `${invalid} rows`, market: "Data quality", source: "Sanity" });
+  const weak = parlays.find((parlay) => Number(parlay.weakestLegScore || 100) < 70);
+  if (weak) alerts.push({ id: "weakest-parlay-production", type: "Weakest parlay leg failed", severity: "High", action: "Rebuild parlay", matchup: weak.weakestLeg?.game || weak.label, market: weak.weakestLeg?.marketType || "Parlay", source: "Parlay" });
+  const priceGone = opportunities.filter((item) => item.priceDiscipline?.action === "Price gone").length;
+  const score = Math.round(clamp(70 + Math.min(20, alerts.length * 4) - Math.min(18, priceGone), 0, 100));
+  return {
+    status: alerts.length ? "Active monitoring" : "Quiet",
+    score,
+    count: alerts.length,
+    priceGone,
+    alerts: alerts.slice(0, 8),
+    nextAction: "Send these alerts through email/SMS/push once user accounts are live",
+  };
+}
+
+function buildPersonalizedBankrollBrain(riskOffice, betTracker) {
+  const settings = riskOffice.settings || {};
+  const bankroll = Number(settings.bankroll || betTracker.summary?.bankroll || 10000);
+  const dailyLossLimit = Math.abs(Number(settings.stopLoss || -8));
+  const openExposure = Number(betTracker.summary?.openExposure || 0);
+  const exposurePercent = bankroll ? round((openExposure / bankroll) * 100, 2) : 0;
+  const stopNewBets = exposurePercent > Number(settings.maxDailyExposure || 8) || riskOffice.guardrailStatus === "Review";
+  const riskStyle = Number(settings.maxStakePerBet || 3) <= 2 ? "Conservative" : Number(settings.maxStakePerBet || 3) >= 5 ? "Aggressive" : "Balanced";
+  const score = Math.round(clamp(100 - Number(riskOffice.riskScore || 0) * 0.55 - (stopNewBets ? 14 : 0), 0, 100));
+  return {
+    status: stopNewBets ? "Protect bankroll" : "Accepting selective risk",
+    score,
+    riskStyle,
+    bankroll,
+    dailyLossLimit,
+    openExposure,
+    exposurePercent,
+    maxStakePerBet: settings.maxStakePerBet,
+    maxDailyExposure: settings.maxDailyExposure,
+    stopNewBets,
+    nextAction: stopNewBets ? "Pause new bets until exposure or warnings clear" : "Keep sizing with fractional Kelly and no chasing losses",
+  };
+}
+
+function buildMobileBetSlip(opportunities, parlays) {
+  const straight = opportunities.find((item) => item.priceDiscipline?.action === "Bet now") || opportunities[0];
+  const parlay = parlays.find((item) => item.targetHitRateMode?.qualified) || parlays[0];
+  const slip = straight ? {
+    type: "Straight bet",
+    exactBet: `${straight.market} ${straight.line}`,
+    matchup: straight.matchup,
+    scheduledAt: straight.scheduledAt || straight.commenceTime || null,
+    sportsbook: straight.book,
+    odds: extractAmericanFromLine(straight.line) ?? impliedPriceFromProbability(straight.marketProbability || 50),
+    maxStake: `${round(Math.max(0.1, Number(straight.kelly || 0) * 0.35), 2)}u`,
+    doNotTakeWorseThan: straight.priceDiscipline?.minimumAcceptableOdds || extractAmericanFromLine(straight.line) || straight.line,
+    reason: `${round(straight.ev, 1)}% EV, ${round(straight.edge, 1)} edge, ${straight.modelTrustScore || 0}/100 trust.`,
+    invalidationRules: (straight.invalidationRules || []).slice(0, 3),
+  } : null;
+  const parlaySlip = parlay ? {
+    type: parlay.label,
+    exactBet: `${parlay.legs.length} legs at ${formatAmerican(parlay.americanOdds)}`,
+    matchup: parlay.legs.map((leg) => leg.game).slice(0, 2).join(" | "),
+    sportsbook: parlay.legs[0]?.sportsbook || "Best available",
+    odds: parlay.americanOdds,
+    maxStake: `$${round(parlay.recommendedStake || 0, 2)}`,
+    doNotTakeWorseThan: parlay.americanOdds,
+    reason: `${round(parlay.hitProbability || 0, 1)}% model hit rate, weakest leg ${parlay.weakestLegScore || 0}/100.`,
+    invalidationRules: (parlay.invalidationRules || []).slice(0, 3),
+  } : null;
+  return {
+    status: slip ? "Ready" : "No slip",
+    score: slip ? 88 : 25,
+    primary: slip,
+    parlay: parlaySlip,
+    nextAction: "Build this into a dedicated one-screen mobile route when deploying",
+  };
+}
+
+function buildRealParlayProof(parlays, parlayBacktest) {
+  const results = parlayBacktest.results || [];
+  const byLegCount = aggregateParlayResults(results, "legs");
+  const byStrategy = aggregateParlayResults(results, "label");
+  const bySport = aggregateParlayResults(results, "sport");
+  const byMarket = aggregateParlayResults(results, "market");
+  const byOddsRange = aggregateParlayResults(results.map((item) => ({ ...item, oddsRange: parlayOddsRange(item.odds) })), "oddsRange");
+  const byWeakestLeg = parlays.map((parlay) => ({
+    label: parlay.label,
+    legs: parlay.legs.length,
+    weakestLegScore: parlay.weakestLegScore || 0,
+    hitProbability: parlay.hitProbability || 0,
+    odds: parlay.americanOdds,
+    status: parlay.weakestLegScore >= 70 ? "Proof candidate" : "Needs rebuild",
+  })).slice(0, 8);
+  const score = Math.round(clamp((results.length / 144) * 55 + Math.min(35, byLegCount.length * 8) + (parlays.some((item) => item.targetHitRateMode?.qualified) ? 10 : 0), 20, 100));
+  return {
+    status: results.length ? "Paper proof active" : "Waiting for results",
+    score,
+    totalResults: results.length,
+    byLegCount,
+    byStrategy,
+    bySport,
+    byMarket,
+    byOddsRange,
+    byWeakestLeg,
+    nextAction: "Replace paper parlay proof with settled real parlay tickets by leg count, strategy, sport, market, weakest leg score, and odds range",
+  };
+}
+
+function aggregateParlayResults(results, key) {
+  const grouped = new Map();
+  for (const item of results) {
+    const label = String(item[key] ?? "Unknown");
+    const row = grouped.get(label) || { label, bets: 0, wins: 0, profitLoss: 0, staked: 0, avgOdds: 0 };
+    row.bets += 1;
+    row.wins += item.result === "Win" ? 1 : 0;
+    row.profitLoss += Number(item.profitLoss || 0);
+    row.staked += Number(item.stake || 0);
+    row.avgOdds += Number(item.odds || 0);
+    grouped.set(label, row);
+  }
+  return [...grouped.values()].map((row) => ({
+    label: row.label,
+    bets: row.bets,
+    winRate: row.bets ? round((row.wins / row.bets) * 100, 1) : 0,
+    roi: row.staked ? round((row.profitLoss / row.staked) * 100, 1) : 0,
+    profitLoss: round(row.profitLoss, 2),
+    avgOdds: row.bets ? Math.round(row.avgOdds / row.bets) : 0,
+  })).sort((a, b) => b.roi - a.roi).slice(0, 8);
+}
+
+function parlayOddsRange(odds) {
+  const value = Number(odds || 0);
+  if (value <= 180) return "+100 to +180";
+  if (value <= 350) return "+181 to +350";
+  if (value <= 700) return "+351 to +700";
+  return "+701 or higher";
 }
 
 function buildBacktest(opportunities) {

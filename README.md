@@ -17,6 +17,7 @@ What is included:
 - Game Schedule Board with start times across the opportunity feed, bet detail tickets, parlay legs, and tracked bet suggestions.
 - Superhuman Intelligence Layer with sport-specific model profiles, book sharpness weighting, injury/lineup/weather context risk, price discipline, "price is gone" refusal logic, model grading, alert intelligence, and cloud-readiness diagnostics.
 - 50% Hit Rate Mode for parlays, which builds safer two-leg alt-line tickets with 72%+ leg probability targets, strict confidence/data/context rules, weakest-leg checks, and lower payout expectations.
+- Production Upgrade Engine that scores auto-settlement readiness, historical odds warehouse health, cloud/user-account readiness, worker status, sport-model coverage, model grading, smart alerts, personalized bankroll protection, mobile bet slip mode, and parlay proof.
 
 Run locally:
 
@@ -83,3 +84,13 @@ Parlay win-rate mode:
 - Athena requires 72%+ target model probability per leg, 78+ confidence, 80+ data quality, context risk below 55, no `Price gone` legs, and weakest leg score 70+.
 - Use the safer alternate-line version shown in the ticket. If you use the original higher-payout line, the mode no longer applies.
 - This is still model-projected probability, not a guaranteed win rate. Settled real results are needed to prove whether the mode is truly reaching 50% over time.
+
+Production upgrade engine:
+
+- Open the Brain workspace and review `Production Upgrade Engine`.
+- The panel shows which systems are already working locally and which ones need real infrastructure.
+- `Auto-Settlement Engine` stays in manual mode until you add a final scores/results API.
+- `Worker Engine` stays in inline mode until odds fetching/scoring is moved into a hosted background worker.
+- `Cloud Accounts` becomes cloud-ready when Supabase/Postgres/auth/secret variables are configured.
+- `Mobile Bet Slip Mode` gives a one-screen version of the exact bet, sportsbook, odds, max stake, do-not-take-worse-than price, reason, and invalidation rules.
+- `Real Parlay Proof` tracks parlay performance by leg count, strategy, sport, market, odds range, and weakest-leg score.
